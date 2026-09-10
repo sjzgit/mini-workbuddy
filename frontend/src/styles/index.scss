@@ -1,0 +1,3 @@
+// 全局基础样式入口（tokens → 字体 → main → antd 的引入顺序见 main.ts）
+@use './tokens.scss';
+@use './main.scss';

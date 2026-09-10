@@ -1,0 +1,46 @@
+// =============================================================
+// mini-workbuddy 设计令牌（唯一主定义）
+// 所有页面与组件 MUST 引用本文件的 CSS 变量，禁止散写相近色。
+// 使用规范见根目录 AGENTS.md §8。
+// =============================================================
+
+:root {
+  // ---- 背景（层级由外到内：deep → base → surface/elevated）----
+  --bg-deep: #f7f3ec; // 浏览器最外层背景
+  --bg-base: #faf7f1; // 页面主内容背景
+  --bg-surface: #ffffff; // 卡片、弹窗、输入区域
+  --bg-elevated: #ffffff; // 浮层背景
+  --bg-hover: #f0ebe2; // 鼠标经过的列表项
+  --bg-active: #e8e1d6; // 当前选中的菜单项
+
+  // ---- 边框 ----
+  --border: #e4ddd3; // 普通边框
+  --border-hover: #d4cbc0; // 悬停边框
+  --border-strong: #cdc3b6; // 强调边框
+
+  // ---- 主色（暖橙）----
+  --accent: #c2703a; // 主按钮
+  --accent-hover: #a85f30; // 主按钮悬停
+  --accent-dim: rgba(194, 112, 58, 0.08); // 主色弱化底（强调块背景等）
+
+  // ---- 文本 ----
+  --text-primary: #2d2017; // 标题与主要内容
+  --text-secondary: #7a6b5d; // 说明文字
+  --text-tertiary: #a89882; // 时间、占位说明等弱信息
+  --text-inverse: #ffffff; // 深色底上的文本
+
+  // ---- 语义色 ----
+  --success: #27896a;
+  --warning: #b8860b;
+  --danger: #c0392b;
+
+  // ---- 字体 ----
+  // 正文 DM Sans / 标题与产品名 Outfit / 代码日志 Fira Code
+  // 网络字体不可用时依次回退系统字体，不阻塞页面
+  --font-body: 'DM Sans Variable', 'DM Sans', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', sans-serif;
+  --font-display: 'Outfit Variable', 'Outfit', 'DM Sans Variable', -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Fira Code Variable', 'Fira Code', 'SF Mono', Monaco, Menlo,
+    Consolas, monospace;
+}

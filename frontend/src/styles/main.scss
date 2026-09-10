@@ -1,0 +1,75 @@
+// =============================================================
+// 全局基础样式（引用 tokens.scss 的 CSS 变量）
+// 字号规格：正文 14px / 行高 1.5；主标题 22px·650；
+// 卡片标题 16–17px·600；辅助说明 12–12.5px；代码 13px。
+// =============================================================
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 14px; // 正文与表单
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-deep);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+
+  &:hover {
+    color: var(--accent-hover);
+  }
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--font-mono);
+  font-size: 13px; // 代码与命令
+}
+
+// 全局滚动条（轻量，贴合暖色系）
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

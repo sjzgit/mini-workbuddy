@@ -1,0 +1,26 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.19.2",
+    "cryptography>=50.0.1",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy>=2.0.52",
+    "tzdata>=2026.3",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pyright>=1.1.413",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

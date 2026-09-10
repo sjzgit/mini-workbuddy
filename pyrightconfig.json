@@ -1,0 +1,20 @@
+{
+  "include": ["backend"],
+  "exclude": [
+    "**/__pycache__",
+    "**/.venv",
+    "**/venv",
+    "**/node_modules"
+  ],
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.12",
+  "reportUnusedImport": false,
+  "reportUnusedVariable": false,
+  "reportOptionalMemberAccess": false,
+  "reportArgumentType": false,
+  "reportUnknownVariableType": false,
+  "reportUnknownMemberType": false,
+  "reportUnknownParameterType": false,
+  "reportUnknownArgumentType": false,
+  "reportMissingTypeStubs": false
+}

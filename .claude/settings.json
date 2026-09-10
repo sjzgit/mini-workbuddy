@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      {
+        "tool": "Bash",
+        "path": "f:/工作备忘录/修炼/叶小钗/AI-10/mini-workbuddy/**"
+      }
+    ]
+  }
+}
