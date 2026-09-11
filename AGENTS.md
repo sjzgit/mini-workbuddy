@@ -70,7 +70,7 @@ mini-workbuddy/
 │   │   └── models/        # ORM 模型（有业务后再建）
 │   ├── migrations/        # Alembic 环境
 │   ├── tests/             # pytest
-│   ├── workspace/         # 文件读写工具授权目录（运行时生成，不入库）
+│   ├── workspace/         # 文件读写工具授权目录 + Skills 目录（运行时生成，不入库）
 │   ├── pyproject.toml
 │   └── uv.lock
 ├── specs/                 # spec-kit 规范文档

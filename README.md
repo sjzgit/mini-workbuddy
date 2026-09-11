@@ -20,7 +20,7 @@ uv sync
 uv run alembic upgrade head
 
 # 2. 启动后端（backend/ 目录，另开终端可保持 --reload）
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8218
 
 # 3. 前端：安装依赖并启动（frontend/ 目录，另开一个终端）
 cd ../frontend

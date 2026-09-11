@@ -7,13 +7,15 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api import health, models, tools
+from app.api import health, mcp, models, skills, tools
 from app.core.config import settings
 
 app = FastAPI(title=settings.app_name)
 app.include_router(health.router)
 app.include_router(models.router)
 app.include_router(tools.router)
+app.include_router(skills.router)
+app.include_router(mcp.router)
 
 
 @app.exception_handler(RequestValidationError)

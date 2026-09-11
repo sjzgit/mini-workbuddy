@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     shell_timeout_seconds: int = 60  # Shell 命令执行超时
     shell_output_max_chars: int = 20000  # Shell 输出截断上限
     file_max_bytes: int = 1048576  # 文件读写单文件上限（1MB）
+    # ---- Skills 与 MCP 管理（specs/004-skills-mcp-management/contracts/*.md §7/§8）----
+    skills_dir: str = "./workspace/skills"  # Skill 目录根（相对 backend 运行目录）
+    skill_import_max_bytes: int = 10485760  # ZIP 导入解压总大小上限（10MB）
+    mcp_test_timeout_seconds: int = 30  # MCP 测试连接总超时（启动+初始化+读工具）
 
 
 settings = Settings()

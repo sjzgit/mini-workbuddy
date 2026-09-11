@@ -76,3 +76,19 @@ def workspace_dir(
     root.mkdir()
     monkeypatch.setattr("app.core.config.settings.authorized_dir", str(root))
     return root
+
+
+@pytest.fixture
+def skills_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """隔离的 Skills 目录根（不触碰 backend/workspace/skills/），测试内按需建子目录。"""
+    root = tmp_path / "skills"
+    root.mkdir()
+    monkeypatch.setattr("app.core.config.settings.skills_dir", str(root))
+    return root
+
+
+@pytest.fixture
+def mcp_test_timeout(monkeypatch: pytest.MonkeyPatch) -> int:
+    """缩短 MCP 测试连接总超时（默认 30s，集成测试压到 3s 控制时长）。"""
+    monkeypatch.setattr("app.core.config.settings.mcp_test_timeout_seconds", 3)
+    return 3

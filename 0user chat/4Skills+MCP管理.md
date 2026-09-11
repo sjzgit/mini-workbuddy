@@ -14,6 +14,16 @@
 页面配色、字号、布局和交互方式与已有管理页面保持一致。
 完成后，运行相关测试、前端类型检查和构建，修复所有失败项，并说明实现内容和验证结果。
 
+---
+## 增加skill目录结构及文件在线编辑
+
+1. skill详情改为大的dialog：
+   1. 上方显示-基础信息：skill名称、描述、是否启用、技能目录名称、更新时间；支持单独保存基础信息
+   2. 下方显示：
+      1. 左侧：skill的文件夹目录结构
+      2. 右侧：选中某个文件后在线编辑区域，使用textarea编辑即可，可以保存写入到文件中
+---
+
 # MCP 管理
 
 MCP Server 可以通过外部程序向 Agent 提供工具。需支持在本机启动(通过 stdio 通信) 及 支持远程 HTTP 的MCP Server。暂不支持 OAuth和账号授权。
@@ -57,3 +67,28 @@ MCP 管理页面需要展示服务器名称、说明、类型、最近一次测�
 ## 页面与验证
 页面配色、字号、布局和交互方式与已有管理页面保持一致。
 完成后，运行相关测试、前端类型检查和构建，修复所有失败项，并说明实现内容和验证结果。
+
+---
+## MCP管理的新增中增加json导入
+
+1. 将MCP-类型中的`本机启动`名称改为`stadio`
+2. 当选择`stadio`是增加`json导入`的方式：
+   1. 通过textarea输入json内容
+   2. 点击`解析json`按钮，将json内容导入到对应的字段中
+3. JSON格式参考：
+```
+{
+  "name": "filesystem",
+  "description": "filesystem",
+  "transport": "stdio",
+  "enabled": true,
+  "command": "npx",
+  "args": [
+    "-y",
+    "@modelcontextprotocol/server-filesystem"
+  ],
+  "env": {}
+}
+```
+4. BUG：目前MCP Server弹窗中点击保存没有反应，前端报错：`McpServerFormModal.vue:123 Warning: [ant-design-vue: Form] model is required for validateFields to work.`
+---
