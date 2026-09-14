@@ -7,7 +7,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -167,4 +167,109 @@ class McpServerEntry(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+
+class AgentEntry(Base):
+    """agents 表：Agent 主配置。
+
+    数据模型主定义：specs/007-agent-management/data-model.md §1
+    model_id 为业务引用（不建 DB 外键，资源删除保护走应用层，research R4）；
+    system_prompt 是版本表最新行的冗余快照（直读免 join，research R1/R5）。
+    """
+
+    __tablename__ = "agents"
+
+    __table_args__ = (
+        # 部分唯一索引：数据库层保证至多一个默认 Agent（research R2）
+        Index(
+            "uq_agents_single_default",
+            "is_default",
+            unique=True,
+            sqlite_where=text("is_default = 1"),
+        ),
+        Index("ix_agents_updated_at", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(
+        String(500), nullable=False, default="", server_default=text("''"),
+    )
+    model_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    max_rounds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default=text("10"),
+    )
+    enable_deep_thinking: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0"),
+    )
+    thinking_level: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="off", server_default=text("'off'"),
+    )  # off | low | medium | high（contracts ThinkingLevel）
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+
+class AgentBinding(Base):
+    """agent_bindings 表：Agent 与工具 / Skill / MCP Server 的绑定（通表）。
+
+    数据模型主定义：specs/007-agent-management/data-model.md §2
+    (resource_type, resource_id) 不建 DB 外键——删除保护在应用层（research R4）；
+    agent_id 外键 ON DELETE CASCADE 兜底（SQLite 需 PRAGMA 生效，service 层显式清理为准）。
+    """
+
+    __tablename__ = "agent_bindings"
+
+    __table_args__ = (
+        Index(
+            "uq_agent_bindings_unique",
+            "agent_id", "resource_type", "resource_id",
+            unique=True,
+        ),
+        # 反查"哪些 Agent 引用了此资源"——删除保护高频查询（research R4）
+        Index("ix_agent_bindings_resource", "resource_type", "resource_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_id: Mapped[int] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=False,
+    )
+    resource_type: Mapped[str] = mapped_column(String(10), nullable=False)  # tool | skill | mcp
+    resource_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+
+
+class AgentPromptVersion(Base):
+    """agent_prompt_versions 表：系统提示词版本快照（只追加，历史只读）。
+
+    数据模型主定义：specs/007-agent-management/data-model.md §3
+    仅当提示词内容变化时追加（FR-018~020），任何业务路径不 UPDATE/DELETE 此表。
+    """
+
+    __tablename__ = "agent_prompt_versions"
+
+    __table_args__ = (
+        Index(
+            "uq_agent_prompt_versions",
+            "agent_id", "version",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    agent_id: Mapped[int] = mapped_column(
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
     )

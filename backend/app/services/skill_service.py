@@ -23,7 +23,7 @@ from app.schemas.skill import (
     SkillItem,
     SkillRefreshResult,
 )
-from app.services import skill_files
+from app.services import agent_references, skill_files
 
 
 class SkillNotFoundError(LookupError):
@@ -152,11 +152,18 @@ def set_enabled(session: Session, dir_name: str, enabled: bool) -> SkillItem:
 
 
 def delete_skill(session: Session, dir_name: str) -> None:
-    """删除（FR-014）：目录 + DB 行同删；目录占用等系统错误转人话 SkillOperationError。"""
+    """删除（FR-014）：目录 + DB 行查到后才删；目录占用等系统错误转人话 SkillOperationError。
+
+    Agent 引用检查在最前（007 US6）：被引用即拒绝，不动目录与 DB 行。
+    """
     entry = session.scalar(select(SkillEntry).where(SkillEntry.dir_name == dir_name))
     dir_path = skill_files.skills_root() / dir_name
     if entry is None and not skill_files.is_compliant(dir_path):
         raise SkillNotFoundError(f"Skill {dir_name} 不存在")
+    if entry is not None:
+        agent_references.assert_not_referenced_by_agent(
+            session, "skill", entry.id, entry.dir_name,
+        )
     try:
         skill_files.delete_skill_dir(dir_path)
     except OSError as exc:

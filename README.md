@@ -19,8 +19,10 @@ cd backend
 uv sync
 uv run alembic upgrade head
 
-# 2. 启动后端（backend/ 目录，另开终端可保持 --reload）
-uv run uvicorn app.main:app --reload --port 8218
+# 2. 启动后端（backend/ 目录，端口读自 backend/app/core/config.py）
+uv run python start_dev.py
+# 若提示端口被占用（上次异常退出留下的孤儿进程），用 --reset 清理后启动：
+uv run python start_dev.py --reset
 
 # 3. 前端：安装依赖并启动（frontend/ 目录，另开一个终端）
 cd ../frontend
@@ -29,7 +31,7 @@ npm run dev
 ```
 
 打开前端开发地址（默认 <http://localhost:5173>）：默认进入聊天页，左侧可切换 8 个模块。
-后端健康检查：<http://127.0.0.1:8000/api/health>（返回 `{"status":"ok"}`）。
+后端健康检查：<http://127.0.0.1:8218/api/health>（返回 `{"status":"ok"}`）。
 
 > 前端在开发环境始终请求相对路径 `/api`，由 Vite 代理转发到后端（`frontend/vite.config.ts`）。
 

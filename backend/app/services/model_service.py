@@ -20,7 +20,7 @@ from app.schemas.model import (
     TestConnectionResult,
 )
 from app.schemas.model import TestErrorCategory
-from app.services import openai_client
+from app.services import agent_references, openai_client
 from app.services.openai_client import BadResponseFormatError, ChatHttpError
 
 # 测试连接失败提示模板（契约主定义，前端原样展示）
@@ -138,11 +138,15 @@ def set_default(session: Session, model_id: int) -> None:
 def delete_model(session: Session, model_id: int, new_default_id: int | None) -> None:
     """删除：默认模型 + 仍有其他模型时必须提供合法 new_default_id（FR-020/021）。
 
+    Agent 引用检查在最前（007 FR-029：先查引用，再走默认切换规则）。
     同事务完成"清默认位 → 设新默认 → 删除 + 清理密钥"，避免中间态。
     """
     entry = session.get(ModelEntry, model_id)
     if entry is None:
         raise ModelNotFoundError(f"模型 {model_id} 不存在")
+
+    # Agent 引用保护（specs/007 US6）：被引用即拒绝，不触发默认切换
+    agent_references.assert_not_referenced_by_agent(session, "model", model_id, entry.display_name)
 
     others_count = session.scalar(
         select(func.count()).select_from(ModelEntry).where(ModelEntry.id != model_id),

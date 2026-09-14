@@ -18,6 +18,7 @@ from app.schemas.mcp import (
     McpToggleRequest,
 )
 from app.services import mcp_service
+from app.services.agent_references import ReferencedByAgentError
 from app.services.mcp_service import McpBusyError, McpNameConflictError, McpNotFoundError
 
 router = APIRouter(prefix="/api/mcp/servers", tags=["mcp"])
@@ -62,6 +63,11 @@ def update_server(
 def delete_server(server_id: int, session: Session = Depends(get_session)) -> object:
     try:
         mcp_service.delete_server(session, server_id)
+    except ReferencedByAgentError as exc:
+        raise HTTPException(status_code=409, detail={
+            "detail": str(exc),
+            "referenced_by_agents": exc.referenced_by,
+        }) from exc
     except McpNotFoundError as exc:
         raise HTTPException(status_code=404, detail="MCP Server 不存在") from exc
     except McpBusyError as exc:

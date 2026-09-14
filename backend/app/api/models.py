@@ -17,6 +17,7 @@ from app.schemas.model import (
     TestConnectionResult,
 )
 from app.services import model_service
+from app.services.agent_references import ReferencedByAgentError
 from app.services.model_service import DefaultSwitchError, ModelNotFoundError
 
 router = APIRouter(prefix="/api/models", tags=["models"])
@@ -63,6 +64,11 @@ def delete_model(
         return DeleteResponse()
     except ModelNotFoundError as exc:
         raise HTTPException(status_code=404, detail="模型不存在") from exc
+    except ReferencedByAgentError as exc:
+        raise HTTPException(status_code=409, detail={
+            "detail": str(exc),
+            "referenced_by_agents": exc.referenced_by,
+        }) from exc
     except DefaultSwitchError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

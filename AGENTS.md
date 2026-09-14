@@ -105,7 +105,8 @@ mini-workbuddy/
 ```bash
 uv sync                                  # 安装依赖
 uv run alembic upgrade head              # 执行数据库迁移
-uv run uvicorn app.main:app --reload --port 8218   # 启动后端（开发）
+uv run python start_dev.py               # 启动后端（开发；端口读 config.dev_server_port）
+uv run python start_dev.py --reset       # 启动前清理端口残留进程（孤儿进程自愈）
 uv run pytest                            # 运行测试
 uv run pyright                           # 类型检查
 ```
@@ -114,7 +115,7 @@ uv run pyright                           # 类型检查
 
 ```bash
 npm install                # 安装依赖（frontend/.npmrc 已固定 legacy-peer-deps）
-npm run dev                # 启动开发服务器（/api 代理到 127.0.0.1:8000）
+npm run dev                # 启动开发服务器（/api 代理到 127.0.0.1:8218，见 vite.config.ts）
 npm run build              # 生产构建（type-check 前置）
 npm run test:unit          # Vitest 单元测试（单次运行）
 ```

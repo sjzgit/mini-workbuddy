@@ -1,0 +1,19 @@
+{
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.patterns": {
+    "tsconfig.json": "tsconfig.*.json, env.d.ts, typed-router.d.ts",
+    "vite.config.*": "jsconfig*, vitest.config.*, cypress.config.*, playwright.config.*",
+    "package.json": "package-lock.json, pnpm*, .yarnrc*, yarn*, .eslint*, eslint*, .oxlint*, oxlint*, .prettier*, prettier*, .editorconfig, bun.lock, nub.lock",
+    "pyproject.toml": "uv.lock, .python-version"
+  },
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
+  "python.analysis.extraPaths": ["backend"],
+  "search.exclude": {
+    "**/.venv": true,
+    "**/dist": true,
+    "backend/workspace": true
+  },
+  "files.watcherExclude": {
+    "**/backend/.venv/**": true
+  }
+}

@@ -22,7 +22,7 @@ from app.schemas.mcp import (
     McpToolInfo,
     mask_value,
 )
-from app.services import mcp_client
+from app.services import agent_references, mcp_client
 from app.services.mcp_client import TransportConfig
 
 # 快照状态（data-model.md：NULL=未测试 / success / failed / config_changed）
@@ -236,12 +236,16 @@ def update_server(
 
 
 def delete_server(session: Session, server_id: int) -> None:
-    """删除：行 + 两份密文同删；测试进行中拒绝（Edge Case）。"""
+    """删除：行 + 两份密文同删；测试进行中拒绝（Edge Case）。
+
+    Agent 引用检查在最前（007 US6）：被引用即拒绝，不动行与密文。
+    """
     entry = session.get(McpServerEntry, server_id)
     if entry is None:
         raise McpNotFoundError(f"MCP Server {server_id} 不存在")
     if is_testing(server_id):
         raise McpBusyError("正在测试中，请稍后再试")
+    agent_references.assert_not_referenced_by_agent(session, "mcp", server_id, entry.name)
     secret_vault.delete_secret(session, entry.env_secret_ref)
     secret_vault.delete_secret(session, entry.headers_secret_ref)
     session.delete(entry)

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
 
     app_name: str = "mini-workbuddy"
     database_url: str = "sqlite:///./app.db"
+    # 开发服务器监听地址与端口（uv run python start_dev.py 读取，可用环境变量覆盖）
+    dev_server_host: str = "127.0.0.1"
+    dev_server_port: int = 8218
     # 主密钥文件路径（密钥库；secret.key 不入库，见 .gitignore）
     secret_vault_path: str = "./secret.key"
     # ---- 工具管理（specs/003-tool-management/contracts/tool-definitions.md §6）----

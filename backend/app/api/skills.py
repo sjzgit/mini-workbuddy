@@ -21,6 +21,7 @@ from app.schemas.skill import (
     SkillUpdateRequest,
 )
 from app.services import skill_service
+from app.services.agent_references import ReferencedByAgentError
 from app.services.skill_service import (
     SkillFileNotFoundError,
     SkillFileTooLargeError,
@@ -99,6 +100,11 @@ def set_skill_enabled(
 def delete_skill(dir_name: str, session: Session = Depends(get_session)) -> SkillDeletedResponse:
     try:
         skill_service.delete_skill(session, dir_name)
+    except ReferencedByAgentError as exc:
+        raise HTTPException(status_code=409, detail={
+            "detail": str(exc),
+            "referenced_by_agents": exc.referenced_by,
+        }) from exc
     except SkillNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Skill 不存在") from exc
     except SkillOperationError as exc:

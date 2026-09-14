@@ -1,13 +1,13 @@
 """FastAPI 应用入口。
 
-启动：uv run uvicorn app.main:app --reload --port 8218（在 backend/ 目录执行）
+启动：uv run python start_dev.py（在 backend/ 目录执行；--reset 可清理端口残留进程）
 """
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api import health, mcp, models, skills, tools
+from app.api import agents, health, mcp, models, skills, tools
 from app.core.config import settings
 
 app = FastAPI(title=settings.app_name)
@@ -16,6 +16,7 @@ app.include_router(models.router)
 app.include_router(tools.router)
 app.include_router(skills.router)
 app.include_router(mcp.router)
+app.include_router(agents.router)
 
 
 @app.exception_handler(RequestValidationError)

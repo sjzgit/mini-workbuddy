@@ -10,6 +10,8 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    /** 原始响应体（409 等结构化错误体用；undefined = 无） */
+    public readonly body?: unknown,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -28,14 +30,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!response.ok) {
-    let detail = `请求失败（HTTP ${response.status}）`
+    let detail: string | { [key: string]: unknown } = `请求失败（HTTP ${response.status}）`
+    let rawBody: unknown
     try {
-      const body = (await response.json()) as { detail?: string }
-      if (body?.detail) detail = body.detail
+      const body = (await response.json()) as { detail?: string | { [key: string]: unknown } }
+      rawBody = body
+      if (typeof body?.detail === 'string') {
+        detail = body.detail
+      } else if (body?.detail && typeof body.detail === 'object') {
+        // 结构化错误体（如 409 requires_new_default）：顶层字段进 body，message 取内层 detail
+        const inner = body.detail as { detail?: string }
+        detail = inner.detail ?? `请求失败（HTTP ${response.status}）`
+      }
     } catch {
       // 非 JSON 响应体，保留默认错误信息
     }
-    throw new ApiError(response.status, detail)
+    throw new ApiError(response.status, detail, rawBody)
   }
 
   return (await response.json()) as T
