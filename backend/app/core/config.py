@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     skills_dir: str = "./workspace/skills"  # Skill 目录根（相对 backend 运行目录）
     skill_import_max_bytes: int = 10485760  # ZIP 导入解压总大小上限（10MB）
     mcp_test_timeout_seconds: int = 30  # MCP 测试连接总超时（启动+初始化+读工具）
+    # ---- 聊天（specs/008-chat-conversations/contracts/chat-api.md"生成任务内部约定"节）----
+    chat_stream_connect_timeout_seconds: int = 10  # 上游模型连接超时
+    chat_stream_read_timeout_seconds: int = 120  # 上游读间隔超时（首字可能较慢）
 
 
 settings = Settings()

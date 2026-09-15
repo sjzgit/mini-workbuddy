@@ -4,6 +4,7 @@
 """
 
 from collections.abc import Iterator
+import asyncio
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,7 +17,14 @@ from sqlalchemy.pool import StaticPool
 from app.core import secret_vault
 from app.core.db import Base, get_session
 from app.main import app
-from app.models import McpServerEntry, ModelEntry, SkillEntry, ToolEntry
+from app.models import (
+    AgentEntry,
+    ConversationEntry,
+    McpServerEntry,
+    ModelEntry,
+    SkillEntry,
+    ToolEntry,
+)
 from app.services import tool_registry
 
 
@@ -156,3 +164,94 @@ def seed_resources(
         "skills": {"on": skill_a, "off": skill_b},
         "mcps": {"on": mcp_on, "off": mcp_off},
     }
+
+
+# ---- 008 聊天共用夹具 ----
+
+
+@pytest.fixture
+def seed_agent(db_session: Session, seed_model: ModelEntry) -> AgentEntry:
+    """播种一个默认 Agent（绑定 seed_model；聊天发送的默认选择）。"""
+    entry = AgentEntry(
+        name="测试助手",
+        description="聊天测试用 Agent",
+        model_id=seed_model.id,
+        system_prompt="你是一个测试助手。",
+        max_rounds=10,
+        is_default=True,
+    )
+    db_session.add(entry)
+    db_session.commit()
+    return entry
+
+
+@pytest.fixture
+def seed_conversation(db_session: Session, seed_agent: AgentEntry) -> ConversationEntry:
+    """播种一个会话（选中 seed_agent）。"""
+    entry = ConversationEntry(title="新会话", agent_id=seed_agent.id)
+    db_session.add(entry)
+    db_session.commit()
+    return entry
+
+
+
+# ---- 008 聊天：假流注入（specs/008-chat-conversations/research.md R9）----
+
+# 阻塞哨兵：脚本步骤中出现时，生成在 await 点阻塞直至 fake.unblocked = True
+# 用字符串而非 object()——conftest 可能被 pytest 与测试文件以不同模块名导入
+BLOCK = "__chat_block__"
+
+
+class FakeStream:
+    """可编排的假 stream_chat_completion：记录请求、按脚本产出增量/异常/阻塞。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.steps: list = []
+        self.unblocked = True  # 跨线程轮询标志（asyncio.Event 跨线程 set 不安全）
+
+    def script(self, *steps: object) -> None:
+        """脚本步骤：delta / Exception / BLOCK（阻塞直至 unblocked=True）。"""
+        self.steps = list(steps)
+
+    async def __call__(self, base_url, model_identifier, api_key, messages, **kwargs):
+        self.calls.append({"base_url": base_url, "model": model_identifier, "messages": messages, **kwargs})
+        for step in self.steps:
+            if isinstance(step, Exception):
+                raise step
+            if step is BLOCK or step == BLOCK:
+                self.unblocked = False
+                while not self.unblocked:
+                    await asyncio.sleep(0.01)
+            else:
+                yield step
+
+
+@pytest.fixture
+def fake_stream(monkeypatch: pytest.MonkeyPatch) -> FakeStream:
+    """替换 chat_service.stream_chat_completion 引用为假流。"""
+    from app.services import chat_service
+
+    fake = FakeStream()
+    monkeypatch.setattr(chat_service, "stream_chat_completion", fake)
+    return fake
+
+
+@pytest.fixture
+def clean_registry():
+    """测试前后清空生成注册表（避免用例间串扰）。"""
+    from app.services.generation_registry import get_registry
+
+    get_registry()._tasks.clear()
+    yield
+    get_registry()._tasks.clear()
+
+
+@pytest.fixture
+def chat_session_factory(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> sessionmaker:
+    """把 chat_service.SessionLocal 指向测试库（生成任务收尾用独立会话落库）。"""
+    from app.services import chat_service
+
+    factory = sessionmaker(bind=db_session.get_bind(), autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(chat_service, "SessionLocal", factory)
+    return factory

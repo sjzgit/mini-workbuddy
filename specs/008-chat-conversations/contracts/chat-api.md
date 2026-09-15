@@ -25,7 +25,7 @@ MessageStatus:
 StreamEvent:
   reasoning_delta  思考过程增量   data: { "text": string }
   content_delta    回答正文增量   data: { "text": string }
-  done             生成终态       data: { "message": MessageOut, "stopped": bool }
+  done             生成终态       data: { "message": MessageOut | null, "stopped": bool }
   error            失败终态       data: { "category": StreamErrorCategory, "message": string }
 
 StreamErrorCategory:
@@ -140,8 +140,8 @@ STREAM_PING_INTERVAL_SECONDS = 15   SSE 心跳注释行间隔
 - 响应：`200`，`Content-Type: text/event-stream`。
 - 事件语义（research R1/R4）：
   - 订阅即**重放**：先按序发送该任务已产生的全部 `reasoning_delta` / `content_delta`，再实时跟随；任务已终态则直接收到 `done` / `error`。
-  - `done`：`{ "message": MessageOut, "stopped": bool }`——终态消息（已完成 / incomplete）已落库；`stopped=true` 表示因用户停止结束。
-  - `error`：`{ "category": StreamErrorCategory, "message": string }`——人话文案直接可展示；随后同样收到终态 `done`（`message.status=incomplete`，或回复行被删除时 `message` 为该会话最新状态快照）。错误文本**永远不会**出现在任何 `content_delta` 中（FR-023）。
+  - `done`：`{ "message": MessageOut | null, "stopped": bool }`——终态消息（已完成 / incomplete）已落库；占位行因停止/失败且无正文被删除时为 `null`；`stopped=true` 表示因用户停止结束。`done` 是流的最后一个事件。
+  - `error`：`{ "category": StreamErrorCategory, "message": string }`——人话文案直接可展示；随后同样收到终态 `done`（`message.status=incomplete`，或占位行被删除时 `message` 为 `null`）。错误文本**永远不会**出现在任何 `content_delta` 中（FR-023）。
   - 心跳：空闲期发送 SSE 注释行 `: ping`（间隔 `STREAM_PING_INTERVAL_SECONDS`），客户端忽略。
 - 幂等：多客户端 / 断线重连订阅同一 `message_id` 均合法。
 - **404** 会话或消息不存在；**409** 该消息不是 assistant 回复。

@@ -216,6 +216,66 @@ class AgentEntry(Base):
     )
 
 
+class ConversationEntry(Base):
+    """conversations 表：会话（聊天功能第八阶段）。
+
+    数据模型主定义：specs/008-chat-conversations/data-model.md §1
+    agent_id 为业务引用（不建 DB 外键）——Agent 删除不阻断会话查看，
+    发送前由应用层校验可用性（spec 切换 Agent 节）。
+    """
+
+    __tablename__ = "conversations"
+
+    __table_args__ = (
+        Index("ix_conversations_updated_at", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="新会话", server_default=text("'新会话'"),
+    )
+    agent_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+
+class MessageEntry(Base):
+    """messages 表：聊天消息（用户消息 / Agent 回复）。
+
+    数据模型主定义：specs/008-chat-conversations/data-model.md §2
+    seq 是会话内唯一顺序号（读取排序唯一依据，禁止仅按时间戳排序）；
+    assistant 回复生成期间先落 generating 占位行，终态单次 UPDATE；
+    agent_id / agent_name 是生成时刻快照，不随 Agent 后续变化。
+    """
+
+    __tablename__ = "messages"
+
+    __table_args__ = (
+        Index("uq_messages_conversation_seq", "conversation_id", "seq", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False,
+    )
+    role: Mapped[str] = mapped_column(String(10), nullable=False)  # user | assistant
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    agent_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    reasoning_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(
+        String(12), nullable=False, default="completed",
+    )  # generating | completed | incomplete（contracts MessageStatus）
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+
+
 class AgentBinding(Base):
     """agent_bindings 表：Agent 与工具 / Skill / MCP Server 的绑定（通表）。
 
