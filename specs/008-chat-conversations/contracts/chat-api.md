@@ -171,3 +171,12 @@ STREAM_PING_INTERVAL_SECONDS = 15   SSE 心跳注释行间隔
 - 深度思考参数：`enable_deep_thinking && thinking_level != "off"` → `"thinking": {"type": "enabled"}`，否则 `{"type": "disabled"}`。
 - 每个上游增量到达后立刻转为 SSE 事件广播；后端同时以 `logging` INFO 级实时打印第三方 API 请求响应摘要（请求：URL 路径、模型标识、消息数；响应：增量长度与累计长度、finish_reason；**不含** Authorization 头与完整密钥，FR-011/FR-025）。
 - 上游读取超时：连接 10s，读间隔 120s（首字可能较慢）；会话级互斥由注册表保证。
+
+## 009 修订记录（specs/009-agent-runtime）
+
+> 自 009 阶段（统一 Agent Runtime）起，本契约的流事件集由 `specs/009-agent-runtime/contracts/agent-runtime-api.md` 扩展与修订，修订内容以该契约为准：
+
+- 终端事件 `done` 由 `run_completed` 取代（原 `message`/`stopped` 字段语义保留于 `RunCompletedData`）。
+- 新增事件：`run_started`、`model_request_started`、`model_request_completed`、`tool_call_started`、`tool_call_completed`；`reasoning_delta` / `content_delta` / `error` 保留原名。
+- 全部事件 data 追加公共字段 `run_id`、`seq`（运行内从 1 递增）；模型请求与工具调用事件带 `round`、`call_id`。
+- HTTP 端点（列表/新建/切换/消息/发送/流/停止/重新生成）路径与请求响应结构不变；流订阅端点的事件集以 009 契约 §2 为准。

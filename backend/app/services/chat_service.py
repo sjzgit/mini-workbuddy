@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -30,8 +31,6 @@ from app.schemas.chat import (
     StartReplyResponse,
     ConversationSummary,
 )
-import httpx
-from app.services import openai_client
 from app.services.generation_registry import (
     EVENT_CONTENT,
     EVENT_DONE,
@@ -41,7 +40,9 @@ from app.services.generation_registry import (
     GenerationTask,
     get_registry,
 )
-from app.services.openai_client import ChatHttpError, stream_chat_completion
+from app.schemas.agent_runtime import RunCompletedData
+from app.services.agent_runtime import RunHistoryMessage, RunLimits, RunRequest, execute_run
+from app.services.agent_runtime import events as runtime_event_names
 
 logger = logging.getLogger(__name__)
 
@@ -267,155 +268,178 @@ async def _run_generation(
     conversation_id: int,
     reply_message_id: int,
     agent_id: int,
+    cancel_event: "asyncio.Event | None" = None,
+    run_id: str = "",
 ) -> None:
-    """生成任务主体：流式调模型 → publish 增量 → 终态落库（research R4/R5）。
+    """生成任务主体（009 桥接，FR-004）：构造 RunRequest → 消费 execute_run 事件 → 终态落库。
 
-    独立数据库会话（SessionLocal）与注册表单例，不依赖请求生命周期。
-    任何异常都保证广播终态事件并清理注册表（FR-023/FR-025）。
+    Runtime 负责模型调用与工具循环；本函数只做事件转发与持久化：
+    reasoning/content 增量直通 SSE 通道（契约 delta 负载）；run_completed 按
+    data-model §2.2 映射落库并合成终态事件。
     """
     registry = get_registry()
     task = registry.get(reply_message_id)
     if task is None:
         return
-    reasoning_parts: list[str] = []
-    content_parts: list[str] = []
+    from app.schemas.agent_runtime import RunCompletedData
+
+    # 有效历史（FR-017）：user 全部 + completed assistant，seq 升序
+    with SessionLocal() as session:
+        history_rows = _effective_history(session, conversation_id)
+        history = [RunHistoryMessage(role=row.role, content=row.content) for row in history_rows]
+
+    request = RunRequest(
+        agent_id=agent_id,
+        user_message="",  # 本次用户消息已是 history 末位（落库后读取，仅出现一次 FR-016）
+        history=history,
+        limits=RunLimits(),
+        cancel=cancel_event or asyncio.Event(),
+        run_id=run_id,
+    )
     stopped = False
     error_category: str | None = None
     error_text: str | None = None
-
+    completed: "RunCompletedData | None" = None
+    content_buffer: list[str] = []
+    reasoning_buffer: list[str] = []
     try:
-        # 每个生成任务独立会话读取输入（主请求会话可能已关闭）
-        with SessionLocal() as session:
-            conversation = session.get(ConversationEntry, conversation_id)
-            agent = session.get(AgentEntry, agent_id)
-            if conversation is None or agent is None:
-                raise AgentUnavailableError(MSG_AGENT_UNAVAILABLE)
-            model = session.get(ModelEntry, agent.model_id)
-            if model is None:
-                raise AgentUnavailableError("该 Agent 绑定的模型已不可用，请重新选择 Agent")
-            api_key = secret_vault.load_secret(session, model.secret_ref)
-            llm_messages = _build_llm_messages(session, conversation, agent)
-            temperature = model.temperature
-            max_tokens = model.max_output_tokens
-            base_url = model.base_url
-            model_identifier = model.model_identifier
-        enable_thinking = bool(agent.enable_deep_thinking and agent.thinking_level != "off")
-        async for delta in stream_chat_completion(
-            base_url,
-            model_identifier,
-            api_key,
-            llm_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            enable_thinking=enable_thinking,
-        ):
-            if isinstance(delta, openai_client.ReasoningDelta):
-                reasoning_parts.append(delta.text)
+        async for event in execute_run(request):
+            if event.event == runtime_event_names.EVENT_REASONING_DELTA:
                 task.publish(StreamEvent(
                     event=EVENT_REASONING,
-                    data=ReasoningDeltaData(text=delta.text).model_dump_json(),
+                    data=json.dumps({
+                        "run_id": event.run_id, "seq": event.seq,
+                        "round": event.data.get("round", 0),
+                        "call_id": event.data.get("call_id", ""),
+                        "text": event.data.get("text", ""),
+                    }, ensure_ascii=False),
                 ))
-            else:
-                content_parts.append(delta.text)
+                reasoning_buffer.append(str(event.data.get("text", "")))
+            elif event.event == runtime_event_names.EVENT_CONTENT_DELTA:
                 task.publish(StreamEvent(
                     event=EVENT_CONTENT,
-                    data=ContentDeltaData(text=delta.text).model_dump_json(),
+                    data=json.dumps({
+                        "run_id": event.run_id, "seq": event.seq,
+                        "round": event.data.get("round", 0),
+                        "call_id": event.data.get("call_id", ""),
+                        "text": event.data.get("text", ""),
+                    }, ensure_ascii=False),
                 ))
+                content_buffer.append(str(event.data.get("text", "")))
+            elif event.event in (
+                runtime_event_names.EVENT_RUN_STARTED,
+                runtime_event_names.EVENT_TOOL_CALL_STARTED,
+                runtime_event_names.EVENT_TOOL_CALL_COMPLETED,
+            ):
+                # 工具事件按契约 §3 原样转发（run_id/seq/round/call_id/工具名/类型/摘要）
+                task.publish(StreamEvent(
+                    event=event.event,
+                    data=json.dumps(event.data, ensure_ascii=False),
+                ))
+            elif event.event == runtime_event_names.EVENT_ERROR:
+                error_category = str(event.data.get("category", "unknown"))
+                error_text = str(event.data.get("message", ""))
+            elif event.event == runtime_event_names.EVENT_RUN_COMPLETED:
+                completed = RunCompletedData.model_validate(event.data)
     except asyncio.CancelledError:
         stopped = True
-    except ChatHttpError as exc:
-        error_category, error_text = _classify_http_error(exc)
-    except httpx.TimeoutException:
-        error_category, error_text = "timeout", _STREAM_ERROR_MESSAGES["timeout"]
-    except httpx.HTTPError:
-        error_category, error_text = "unreachable", _STREAM_ERROR_MESSAGES["unreachable"]
-    except Exception:  # noqa: BLE001 — 无法归类也必须给终态
-        logger.exception("生成任务异常结束 conversation=%s", conversation_id)
-        error_category, error_text = "unknown", _STREAM_ERROR_MESSAGES["unknown"]
-
-    if not stopped and error_category is None and not content_parts and not reasoning_parts:
-        error_category = "empty_response"
-        error_text = _STREAM_ERROR_MESSAGES["empty_response"]
+    except Exception:  # noqa: BLE001 — 桥接层兜底终态（FR-035）
+        logger.exception("runtime 桥接异常 conversation=%s", conversation_id)
+        error_category = error_category or "unknown"
+        error_text = error_text or _STREAM_ERROR_MESSAGES["unknown"]
 
     await _finalize_generation(
-        conversation_id, reply_message_id,
-        reasoning_parts, content_parts,
-        stopped=stopped, error_category=error_category, error_text=error_text,
+        conversation_id, reply_message_id, completed,
+        stopped=stopped,
+        error_category=error_category, error_text=error_text,
+        fallback_content="".join(content_buffer),
+        fallback_reasoning="".join(reasoning_buffer) or None,
     )
-
 
 
 async def _finalize_generation(
     conversation_id: int,
     reply_message_id: int,
-    reasoning_parts: list[str],
-    content_parts: list[str],
+    completed: "RunCompletedData | None",
     *,
     stopped: bool,
     error_category: str | None,
     error_text: str | None,
+    fallback_content: str = "",
+    fallback_reasoning: str | None = None,
 ) -> None:
-    """终态处理：落库 + 广播终态事件 + 注册表清理（research R4/R5）。
-
-    缓冲非空的失败/停止 → incomplete；缓冲为空 → 删占位行（FR-024）。
-    错误文本永不写入 content（FR-023）。
+    """终态处理（009 data-model §2.2）：completed/max_rounds → completed；
+    error/cancelled 有缓冲 → incomplete；无任何正文 → 删占位行（FR-024）。
+    错误文本永不写入 content（FR-023）。终态后注册表移除（会话互斥放行）。
     """
-    has_buffer = bool(content_parts) or bool(reasoning_parts)
+    registry = get_registry()
+    task = registry.get(reply_message_id)
+    if task is None:
+        return
+
+    # 任务被硬取消等场景 completed 为 None：以桥接层累积缓冲兜底（保留已生成部分，FR-024）
+    status_value = completed.status if completed is not None else "error"
+    content_text = completed.content_text if completed is not None else fallback_content
+    reasoning_text = (completed.reasoning_text if completed is not None else fallback_reasoning)
+    is_ok = status_value in ("completed", "max_rounds")
+    has_buffer = bool(content_text) or bool(reasoning_text)
+
+    final = None
     with SessionLocal() as session:
         reply = session.get(MessageEntry, reply_message_id)
         if reply is None:
-            get_registry().remove(reply_message_id)
-            return
-        if not has_buffer and (stopped or error_category):
-            session.delete(reply)
-            final = None
+            registry.remove(reply_message_id)
         else:
-            reply.reasoning_content = "".join(reasoning_parts) or None
-            reply.content = "".join(content_parts)
-            reply.status = "incomplete" if (stopped or error_category) else "completed"
-            final = _to_message_out(reply)
-        conversation = session.get(ConversationEntry, conversation_id)
-        if conversation is not None:
-            conversation.updated_at = _utcnow()
-        session.commit()
-    task = get_registry().get(reply_message_id)
-    if task is None:
-        return
+            if not has_buffer:
+                session.delete(reply)  # 无正文不产生空白回复（FR-024）
+            else:
+                reply.reasoning_content = reasoning_text or None
+                reply.content = content_text
+                reply.status = "completed" if is_ok else "incomplete"
+                final = _to_message_out(reply)
+            conversation = session.get(ConversationEntry, conversation_id)
+            if conversation is not None:
+                conversation.updated_at = _utcnow()
+            session.commit()
+
+    usage_total = completed.usage_total if completed is not None else None
     if error_category is not None:
-        error_event = StreamEvent(
+        task.publish(StreamEvent(
             event=EVENT_ERROR,
             data=ErrorEventData(category=error_category, message=error_text or "").model_dump_json(),
-        )
-        task.publish(error_event)  # error 先发，紧随终态 done（契约语义）
+        ))
     if final is None:
-        get_registry().remove(reply_message_id)  # 占位行已删，无终态消息
         done = StreamEvent(
             event=EVENT_DONE,
-            data=DoneEventData(message=None, stopped=stopped).model_dump_json(),
+            data=json.dumps({
+                "run_id": task.run_id or "", "seq": 0,
+                "status": "error" if error_category else "cancelled",
+                "reason": error_text or "",
+                "usage_total": None, "message": None,
+                "stopped": stopped,
+            }, ensure_ascii=False),
         )
         task.finish(done, stopped=stopped)
+        registry.remove(reply_message_id)  # 占位行已删，无终态消息：先广播后清理
         return
+    reason_text = error_text or (completed.reason if completed is not None else "")
     done = StreamEvent(
         event=EVENT_DONE,
-        data=DoneEventData(message=final, stopped=stopped).model_dump_json(),
+        data=json.dumps({
+            "run_id": task.run_id or "", "seq": 0,
+            "status": ("error" if error_category is not None and not is_ok else status_value),
+            "reason": reason_text,
+            "usage_total": usage_total.model_dump() if usage_total is not None else None,
+            "message": final.model_dump(),
+            "stopped": stopped or bool(completed and completed.stopped),
+        }, ensure_ascii=False),
     )
-    task.finish(done, stopped=stopped)
+    task.finish(done, stopped=done_data_stopped(stopped, completed))
 
 
-
-def _classify_http_error(exc: ChatHttpError) -> tuple[str, str]:
-    """按状态码与响应体映射流内错误类别（同 model_service 分类口径）。"""
-    body = exc.body_snippet.lower()
-    if exc.status_code in (401, 403):
-        return "auth_error", _STREAM_ERROR_MESSAGES["auth_error"]
-    if exc.status_code == 400 and ("context" in body or "token" in body or "length" in body):
-        return "context_overflow", _STREAM_ERROR_MESSAGES["context_overflow"]
-    if exc.status_code == 404 and ("model" in body or "not found" in body):
-        return "model_not_found", _STREAM_ERROR_MESSAGES["model_not_found"]
-    if exc.status_code == 404:
-        return "unreachable", _STREAM_ERROR_MESSAGES["unreachable"]
-    return "unreachable" if 400 <= exc.status_code < 600 else "unknown", _STREAM_ERROR_MESSAGES["unreachable" if 400 <= exc.status_code < 600 else "unknown"]
-
+def done_data_stopped(stopped: bool, completed) -> bool:
+    """合成终态的 stopped 标志（用户停止 或 runtime 判定取消）。"""
+    return stopped or bool(completed is not None and completed.stopped)
 
 
 def send_message(
@@ -463,12 +487,19 @@ def send_message(
 def _start_generation_task(
     conversation_id: int, reply_message_id: int, agent_id: int,
 ) -> None:
-    """创建 GenerationTask 注册并启动 asyncio 任务（需在事件循环内调用）。"""
+    """创建 GenerationTask（含 run_id/cancel_event）并启动 asyncio 桥接任务。"""
     registry = get_registry()
-    gen_task = GenerationTask(conversation_id=conversation_id, reply_message_id=reply_message_id)
+    import uuid as _uuid
+
+    run_id = _uuid.uuid4().hex
+    gen_task = GenerationTask(
+        conversation_id=conversation_id, reply_message_id=reply_message_id,
+        run_id=run_id,
+    )
     registry.register(gen_task)
     gen_task.async_task = asyncio.get_event_loop().create_task(
-        _run_generation(conversation_id, reply_message_id, agent_id)
+        _run_generation(conversation_id, reply_message_id, agent_id,
+                        cancel_event=gen_task.cancel_event, run_id=run_id)
     )
 
 
@@ -589,6 +620,7 @@ async def stop_generation(conversation_id: int, message_id: int) -> None:
     if task.conversation_id != conversation_id:
         raise ConversationNotFoundError(f"会话 {conversation_id} 不存在")
     task.stopped = True
+    task.cancel_event.set()  # 协作式取消：Runtime 在增量/工具/轮间检查（R8）
     task.async_task.cancel()
 
 
@@ -621,12 +653,20 @@ async def build_message_stream(
         message = mark_orphan_message(session, conversation_id, message_id)
         done = StreamEvent(
             event=EVENT_DONE,
-            data=DoneEventData(message=message, stopped=False).model_dump_json(),
+            data=json.dumps({
+                "run_id": "", "seq": 0,
+                "status": "cancelled",
+                "reason": "生成任务已结束（服务重启或订阅晚到）",
+                "usage_total": None,
+                "message": message.model_dump(),
+                "stopped": False,
+            }, ensure_ascii=False),
         )
         yield _sse_frame(done)
         return
     queue = task.subscribe()
     ping_seconds = STREAM_PING_INTERVAL_SECONDS
+    saw_terminal = False
     try:
         while True:
             try:
@@ -636,9 +676,18 @@ async def build_message_stream(
                 continue
             yield _sse_frame(event)
             if event.event == EVENT_DONE:
+                saw_terminal = True
                 return
+    except GeneratorExit:
+        # 客户端断开（关闭页面/连接中断）：由聊天接口触发取消（FR-027），
+        # Runtime 自身不监听连接；SPA 内切换会话不断流（008 FR-022 不受影响）。
+        if not saw_terminal and task.terminal_event is None:
+            task.cancel_event.set()
+        raise
     finally:
         task.unsubscribe(queue)
+        if not saw_terminal and task.terminal_event is None:
+            task.cancel_event.set()  # 兜底：订阅提前退出且无终态 → 协作取消
 
 
 def _sse_frame(event: StreamEvent) -> str:

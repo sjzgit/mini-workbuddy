@@ -229,11 +229,11 @@ class FakeStream:
 
 @pytest.fixture
 def fake_stream(monkeypatch: pytest.MonkeyPatch) -> FakeStream:
-    """替换 chat_service.stream_chat_completion 引用为假流。"""
-    from app.services import chat_service
+    """替换 runtime.stream_chat_completion 引用为假流（009 起模型调用经 Agent Runtime）。"""
+    from app.services.agent_runtime import runtime
 
     fake = FakeStream()
-    monkeypatch.setattr(chat_service, "stream_chat_completion", fake)
+    monkeypatch.setattr(runtime, "stream_chat_completion", fake)
     return fake
 
 
@@ -254,4 +254,16 @@ def chat_session_factory(db_session: Session, monkeypatch: pytest.MonkeyPatch) -
 
     factory = sessionmaker(bind=db_session.get_bind(), autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(chat_service, "SessionLocal", factory)
+    return factory
+
+# ---- 009 Agent Runtime 桥接夹具 ----
+
+
+@pytest.fixture
+def runtime_db(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> sessionmaker:
+    """把 runtime.SessionLocal 指向测试库（Runtime 配置加载/桥接落库用独立会话）。"""
+    from app.services.agent_runtime import runtime
+
+    factory = sessionmaker(bind=db_session.get_bind(), autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(runtime, "SessionLocal", factory)
     return factory

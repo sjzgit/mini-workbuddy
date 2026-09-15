@@ -8,11 +8,13 @@
 import asyncio
 from dataclasses import dataclass, field
 
-# 事件类型常量（契约 StreamEvent）
-EVENT_REASONING = "reasoning_delta"
-EVENT_CONTENT = "content_delta"
-EVENT_DONE = "done"
-EVENT_ERROR = "error"
+# 事件类型常量（009 契约 agent-runtime-api.md §2 取代 008 done → run_completed）
+from app.schemas.agent_runtime import (
+    EVENT_CONTENT_DELTA as EVENT_CONTENT,
+    EVENT_ERROR as EVENT_ERROR,
+    EVENT_REASONING_DELTA as EVENT_REASONING,
+    EVENT_RUN_COMPLETED as EVENT_DONE,  # 兼容别名：终态事件名统一为 run_completed
+)
 
 
 @dataclass
@@ -29,6 +31,8 @@ class GenerationTask:
 
     conversation_id: int
     reply_message_id: int
+    run_id: str = ""
+    cancel_event: "asyncio.Event" = field(default_factory=asyncio.Event)
     async_task: asyncio.Task | None = None
     buffer: list[StreamEvent] = field(default_factory=list)
     subscribers: set[asyncio.Queue] = field(default_factory=set)

@@ -8,12 +8,15 @@ import json
 import time
 
 import pytest
+from sqlalchemy.orm import Session
+
 from app.models import MessageEntry
 from app.services.generation_registry import get_registry
-from app.services.openai_client import ChatHttpError, ContentDelta, ReasoningDelta
+from app.services.openai_client import ChatHttpError, ContentDelta, ReasoningDelta, ToolCallDelta
 from fastapi.testclient import TestClient
 
 from tests.conftest import BLOCK, FakeStream
+from tests.test_agent_runtime_fixtures import fake_runtime_stream  # noqa: F401 — 注册夹具
 
 
 def wait_terminal(message_id: int, timeout: float = 2.0) -> None:
@@ -46,13 +49,18 @@ def read_sse(client: TestClient, conversation_id: int, message_id: int) -> list[
 @pytest.fixture
 def stream_env(
     client: TestClient,
+    db_session: Session,
+    seed_agent,
     seed_conversation,
     fake_stream: FakeStream,
     chat_session_factory,
+    runtime_db,
     clean_registry,
 ):
     return {
         "client": client,
+        "db": db_session,
+        "agent": seed_agent,
         "conversation": seed_conversation,
         "fake": fake_stream,
     }
@@ -73,10 +81,10 @@ class TestStreamEvents:
         # 晚订阅：重放缓冲获得全部增量 + done
         events = read_sse(env["client"], env["conversation"].id, reply_id)
         kinds = [event for event, _ in events]
-        assert kinds == ["content_delta", "done"]
-        done = events[-1][1]
-        assert done["message"]["status"] == "completed"
-        assert done["message"]["content"] == "回答正文"
+        assert kinds == ["run_started", "content_delta", "run_completed"]
+        run_completed = events[-1][1]
+        assert run_completed["message"]["status"] == "completed"
+        assert run_completed["message"]["content"] == "回答正文"
 
     def test_reasoning_content_partition(self, stream_env) -> None:
         env = stream_env
@@ -90,11 +98,11 @@ class TestStreamEvents:
         wait_terminal(reply_id)
         events = read_sse(env["client"], env["conversation"].id, reply_id)
         kinds = [event for event, _ in events]
-        assert kinds == ["reasoning_delta", "reasoning_delta", "content_delta", "done"]
-        done = events[-1][1]
-        assert done["message"]["reasoning_content"] == "先想一步 再想两步"
-        assert done["message"]["content"] == "回答正文"
-        assert done["message"]["status"] == "completed"
+        assert kinds == ["run_started", "reasoning_delta", "reasoning_delta", "content_delta", "run_completed"]
+        run_completed = events[-1][1]
+        assert run_completed["message"]["reasoning_content"] == "先想一步 再想两步"
+        assert run_completed["message"]["content"] == "回答正文"
+        assert run_completed["message"]["status"] == "completed"
 
     def test_error_then_done_incomplete(self, stream_env) -> None:
         env = stream_env
@@ -107,11 +115,11 @@ class TestStreamEvents:
         wait_terminal(reply_id)
         events = read_sse(env["client"], env["conversation"].id, reply_id)
         kinds = [event for event, _ in events]
-        assert kinds == ["content_delta", "error", "done"]
-        error = events[1][1]
+        assert kinds == ["run_started", "content_delta", "error", "run_completed"]
+        error = next(d for e, d in events if e == "error")
         assert error["category"] == "auth_error"
         assert "认证失败" in error["message"]
-        done = events[2][1]
+        done = next(d for e, d in events if e == "run_completed")
         assert done["message"]["status"] == "incomplete"
         assert done["message"]["content"] == "部分内容"
         # 错误文本不入正文（FR-023）
@@ -140,7 +148,7 @@ class TestStreamEvents:
         get_registry()._tasks.clear()
         events = read_sse(env["client"], cid, reply_id)
         kinds = [event for event, _ in events]
-        assert kinds == ["done"]
+        assert kinds == ["run_completed"]
         assert events[0][1]["message"]["status"] == "incomplete"
 
     def test_regenerate_resets_in_place(self, stream_env) -> None:
@@ -156,9 +164,9 @@ class TestStreamEvents:
         assert regen.json()["reply_message_id"] == reply_id  # 同一行原地重置
         wait_terminal(reply_id)
         events = read_sse(env["client"], cid, reply_id)
-        done = events[-1][1]
-        assert done["message"]["content"] == "第二版回答"
-        assert done["message"]["seq"] == 2  # user(1) + reply(2)
+        run_completed = events[-1][1]
+        assert run_completed["message"]["content"] == "第二版回答"
+        assert run_completed["message"]["seq"] == 2  # user(1) + reply(2)
 
     def test_regenerate_rejects_non_assistant_last(self, stream_env) -> None:
         env = stream_env
@@ -235,7 +243,45 @@ class TestStopGeneration:
         assert stop.json() == {"stopped": True}
         wait_terminal(reply_id)
         events = read_sse(env["client"], cid, reply_id)
-        done = events[-1][1]
-        assert done["stopped"] is True
-        assert done["message"]["status"] == "incomplete"
-        assert done["message"]["content"] == "开头"
+        run_completed = events[-1][1]
+        assert run_completed["stopped"] is True
+        assert run_completed["message"]["status"] == "incomplete"
+        assert run_completed["message"]["content"] == "开头"
+
+
+class TestToolEventsInStream:
+    """009 桥接回归：工具事件必须出现在 SSE 流中（修复前被桥接层丢弃）。"""
+
+    def test_tool_call_events_forwarded_and_paired(
+        self, stream_env, tools_seeded, fake_runtime_stream,
+    ) -> None:
+        # fake_runtime_stream 后于 fake_stream 实例化，最终生效（多轮剧本能力）
+        from app.models import AgentBinding, ToolEntry
+
+        db = stream_env["db"]
+        cid = stream_env["conversation"].id
+        agent = stream_env["agent"]
+        bound = db.query(AgentBinding).filter_by(agent_id=agent.id).first()
+        if bound is None:
+            tool_row = db.query(ToolEntry).filter_by(name="current_time").first()
+            db.add(AgentBinding(agent_id=agent.id, resource_type="tool", resource_id=tool_row.id))
+            db.commit()
+        fake_runtime_stream.script(
+            [ToolCallDelta(index=0, id="c1", name="current_time", arguments_fragment="{}")],
+            [ContentDelta(text="现在是白天")],
+        )
+        response = _send(stream_env["client"], cid, "几点了")
+        assert response.status_code == 201
+        reply_id = response.json()["reply_message_id"]
+        wait_terminal(reply_id)
+        events = read_sse(stream_env["client"], cid, reply_id)
+        kinds = [event for event, _ in events]
+        assert "tool_call_started" in kinds and "tool_call_completed" in kinds
+        started = next(d for e, d in events if e == "tool_call_started")
+        completed = next(d for e, d in events if e == "tool_call_completed")
+        assert started["call_id"] == completed["call_id"]
+        assert started["tool_name"] == "current_time"
+        assert started["tool_type"] == "builtin"
+        assert completed["status"] in ("success", "error")
+        # 顺序约束：工具事件在终态之前
+        assert kinds.index("tool_call_started") < kinds.index("run_completed")

@@ -31,12 +31,12 @@ describe('SseParser', () => {
       'event: reasoning_delta\ndata: {"text":"想"}\n\n' +
         'event: content_delta\ndata: {"text":"答"}\n\n' +
         ': ping\n\n' +
-        'event: done\ndata: {"message":null,"stopped":true}\n\n',
+        'event: run_completed\ndata: {"status":"completed","message":null,"stopped":true}\n\n',
     )
     expect(frames.map((f) => f.event)).toEqual([
       'reasoning_delta',
       'content_delta',
-      'done',
+      'run_completed',
     ])
   })
 

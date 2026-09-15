@@ -35,6 +35,7 @@ def chat_env(
     seed_conversation,
     fake_stream: FakeStream,
     chat_session_factory,
+    runtime_db,
     clean_registry,
 ):
     """聊天测试环境：一次备齐路由客户端 + 种子数据 + 假流。"""

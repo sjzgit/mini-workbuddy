@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # ---- 聊天（specs/008-chat-conversations/contracts/chat-api.md"生成任务内部约定"节）----
     chat_stream_connect_timeout_seconds: int = 10  # 上游模型连接超时
     chat_stream_read_timeout_seconds: int = 120  # 上游读间隔超时（首字可能较慢）
+    # ---- Agent Runtime（specs/009-agent-runtime/data-model.md §4）----
+    runtime_skill_max_bytes: int = 65536  # load_skill 指令大小上限（超限报错不截断）
+    runtime_mcp_connect_timeout_seconds: int = 30  # 运行内 MCP 连接+列工具超时
+    runtime_tool_result_summary_chars: int = 200  # 工具结果/参数脱敏摘要截断长度
+    # ---- 工具过程展示（specs/010-tool-execution-display/contracts/display-events.md §1.3）----
+    runtime_tool_params_max_chars: int = 4000  # 工具事件 params 字段字符上限（超出截断+标记）
+    runtime_tool_result_max_chars: int = 16000  # 工具事件 result 字段字符上限（超出截断+标记）
 
 
 settings = Settings()

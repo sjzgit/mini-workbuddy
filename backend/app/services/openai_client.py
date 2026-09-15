@@ -13,6 +13,7 @@ import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 import httpx
 
@@ -106,6 +107,25 @@ class ReasoningDelta:
     text: str
 
 
+@dataclass
+class ToolCallDelta:
+    """工具调用增量（流式累积片段，契约 §2；按 index 聚合为完整调用）。"""
+
+    index: int
+    id: str  # 可能为空串（分片到达时仅首片携带）
+    name: str  # 同上
+    arguments_fragment: str
+
+
+@dataclass
+class UsageInfo:
+    """模型接口实际返回的 Token 用量（None=接口未返回，未知，FR-034）。"""
+
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
+
+
 def _stream_headers(api_key: str | None) -> dict[str, str]:
     """流式请求头（Authorization 仅存于本函数局部，不进日志）。"""
     headers = {"Content-Type": "application/json"}
@@ -123,14 +143,19 @@ async def stream_chat_completion(
     temperature: Decimal,
     max_tokens: int,
     enable_thinking: bool,
-) -> AsyncIterator[ContentDelta | ReasoningDelta]:
-    """流式对话补全：逐增量产出 ContentDelta / ReasoningDelta（research R2）。
+    tools: list[dict[str, Any]] | None = None,
+    include_usage: bool = False,
+) -> AsyncIterator[ContentDelta | ReasoningDelta | ToolCallDelta | UsageInfo]:
+    """流式对话补全：逐增量产出 ContentDelta / ReasoningDelta / ToolCallDelta / UsageInfo。
 
     非 200 抛 ChatHttpError（携带响应体片段供分类）；超时/连接异常
     （httpx.TimeoutException / httpx.HTTPError）原样上抛给编排层分类。
     thinking 参数映射：enable_thinking=True → {"type": "enabled"}（GLM 系）。
+    tools：OpenAI function calling 目录（契约 009 §4），None = 不请求工具；
+    include_usage：请求 stream_options.include_usage，末尾 usage chunk 产出 UsageInfo
+    （服务端不支持时无该 chunk → 调用方标记未知，不填零，FR-034）。
     """
-    payload = {
+    payload: dict[str, Any] = {
         "model": model_identifier,
         "messages": messages,
         "stream": True,
@@ -138,6 +163,11 @@ async def stream_chat_completion(
         "max_tokens": max_tokens,
         "thinking": {"type": "enabled" if enable_thinking else "disabled"},
     }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+    if include_usage:
+        payload["stream_options"] = {"include_usage": True}
     # FR-011：实时打印请求摘要（不含 Authorization 与密钥）
     logger.info(
         "[chat] 请求第三方模型 API：model=%s messages=%d thinking=%s",
@@ -168,13 +198,34 @@ async def stream_chat_completion(
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue  # 忽略无法解析的心跳/杂项行
-                choices = chunk.get("choices") or []
+                # 末尾 usage chunk（choices 为空，usage 单独成 chunk，FR-034）
+                raw_usage = chunk.get("usage") if isinstance(chunk, dict) else None
+                if isinstance(raw_usage, dict):
+                    yield UsageInfo(
+                        prompt_tokens=_int_or_none(raw_usage.get("prompt_tokens")),
+                        completion_tokens=_int_or_none(raw_usage.get("completion_tokens")),
+                        total_tokens=_int_or_none(raw_usage.get("total_tokens")),
+                    )
+                choices = chunk.get("choices") or [] if isinstance(chunk, dict) else []
                 if not choices:
                     continue
                 delta = choices[0].get("delta") or {}
                 finish = choices[0].get("finish_reason")
                 reasoning = delta.get("reasoning_content")
                 content = delta.get("content")
+                raw_tool_calls = delta.get("tool_calls")
+                if isinstance(raw_tool_calls, list):
+                    for fragment in raw_tool_calls:
+                        if not isinstance(fragment, dict):
+                            continue
+                        function = fragment.get("function") or {}
+                        function_name = function.get("name")
+                        yield ToolCallDelta(
+                            index=fragment.get("index") if isinstance(fragment.get("index"), int) else 0,
+                            id=str(fragment.get("id") or ""),
+                            name=str(function_name) if isinstance(function_name, str) else "",
+                            arguments_fragment=str(function.get("arguments") or ""),
+                        )
                 if reasoning:
                     logger.info("[chat] reasoning 增量 %d 字符", len(str(reasoning)))
                     yield ReasoningDelta(text=str(reasoning))
@@ -183,3 +234,8 @@ async def stream_chat_completion(
                     yield ContentDelta(text=str(content))
                 if finish:
                     logger.info("[chat] finish_reason=%s", finish)
+
+
+def _int_or_none(value: object) -> int | None:
+    """usage 数值兜底：非整数一律 None（未知，禁止填零，FR-034）。"""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
