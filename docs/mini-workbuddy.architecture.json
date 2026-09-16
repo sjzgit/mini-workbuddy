@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "mini-workbuddy Agent 平台架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": "mini-workbuddy-architecture.html",
+    "views": [
+      { "id": "main-path", "label": "对话主链路", "focus": ["web", "api", "chat", "runtime", "llm"], "note": "一条消息从浏览器经编排层到 LLM，再以 SSE 流式回传的完整路径。" },
+      { "id": "tool-face", "label": "工具执行面", "focus": ["runtime", "tools", "mcp", "skills"], "note": "run_tool 统一分发内置工具、MCP 调用与 Skill 按需加载。" },
+      { "id": "context-compact", "label": "上下文与压缩", "focus": ["runtime", "context", "db"], "note": "每轮模型请求前检查容量，超限分批摘要并推进 boundary_seq。" },
+      { "id": "observe", "label": "观测与记录", "focus": ["runtime", "runs", "chat", "db"], "note": "RunRecorder 旁路落库三表，支撑运行记录页与会话回放。" },
+      { "id": "secret", "label": "密钥安全", "focus": ["api", "chat", "vault"], "note": "API Key 只经 Secret Vault 存取，Fernet 加密落库，主密钥不入库。" }
+    ]
+  },
+  "components": [
+    { "id": "web", "type": "frontend", "label": "浏览器工作台", "sublabel": "Vue 3 + Pinia", "tag": "SSE 流式渲染", "pos": [40, 290], "size": [150, 64] },
+    { "id": "vault", "type": "security", "label": "Secret Vault", "sublabel": "Fernet · secret.key", "pos": [580, 100], "size": [150, 64] },
+    { "id": "runs", "type": "database", "label": "Run 记录三表", "sublabel": "runs / run_events / payloads", "pos": [850, 100], "size": [170, 64] },
+    { "id": "context", "type": "backend", "label": "ContextBuilder + 压缩", "sublabel": "分批摘要 · boundary_seq", "pos": [1100, 100], "size": [170, 64] },
+    { "id": "api", "type": "backend", "label": "FastAPI 路由层", "sublabel": "uvicorn :8218 · 8 组 API", "pos": [310, 290], "size": [150, 64] },
+    { "id": "chat", "type": "backend", "label": "chat_service", "sublabel": "生成编排 · SSE 桥接", "pos": [580, 290], "size": [150, 64] },
+    { "id": "runtime", "type": "backend", "label": "Agent Runtime", "sublabel": "execute_run 多轮循环", "pos": [850, 286], "size": [170, 72] },
+    { "id": "llm", "type": "external", "label": "OpenAI 兼容中转站", "sublabel": "GLM · /chat/completions", "pos": [1170, 290], "size": [160, 64] },
+    { "id": "db", "type": "database", "label": "SQLite app.db", "sublabel": "13 张业务表", "pos": [310, 530], "size": [150, 64] },
+    { "id": "skills", "type": "database", "label": "Skill 文件库", "sublabel": "workspace/skills", "pos": [580, 530], "size": [150, 64] },
+    { "id": "tools", "type": "backend", "label": "工具执行 run_tool", "sublabel": "内置 / MCP / Skill", "pos": [850, 530], "size": [170, 64] },
+    { "id": "mcp", "type": "external", "label": "MCP Servers", "sublabel": "stdio / streamable_http", "pos": [1120, 530], "size": [150, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "mini-workbuddy 后端 · 单进程 uvicorn", "wraps": ["api", "chat", "runtime", "context", "tools", "runs", "db", "vault", "skills"] }
+  ],
+  "connections": [
+    { "id": "web-to-api", "from": "web", "to": "api", "label": "REST + SSE", "variant": "emphasis" },
+    { "id": "api-to-chat", "from": "api", "to": "chat", "label": "send_message 编排" },
+    { "id": "chat-to-runtime", "from": "chat", "to": "runtime", "label": "execute_run 事件流", "variant": "emphasis" },
+    { "id": "runtime-to-llm", "from": "runtime", "to": "llm", "label": "httpx SSE 流式", "labelDx": 20 },
+    { "id": "chat-to-vault", "from": "chat", "to": "vault", "label": "解密 API Key" },
+    { "id": "runtime-to-runs", "from": "runtime", "to": "runs", "label": "结构事件落库" },
+    { "id": "runtime-to-context", "from": "runtime", "to": "context", "label": "组上下文 · 压缩" },
+    { "id": "runtime-to-tools", "from": "runtime", "to": "tools", "label": "run_tool 分发", "labelDy": 99 },
+    { "id": "tools-to-mcp", "from": "tools", "to": "mcp", "label": "stdio / HTTP" },
+    { "id": "tools-to-skills", "from": "tools", "to": "skills", "label": "load_skill" },
+    { "id": "chat-to-db", "from": "chat", "to": "db", "label": "会话与消息持久化" },
+    { "id": "api-to-db", "from": "api", "to": "db", "label": "资源配置 CRUD", "labelDy": 101 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "前端", "items": [
+      "Vue 3 工作台：聊天 / Agent / 模型 / 工具 / MCP / Skills / 运行记录",
+      "Pinia store 层持有 SSE 流，刷新不丢",
+      "ReadableStream 手工解析 SSE，非 EventSource"
+    ] },
+    { "dot": "emerald", "title": "后端主链路", "items": [
+      "FastAPI 薄路由 → chat_service → agent_runtime 事件循环",
+      "生成任务与 SSE 订阅解耦，客户端断开不断流",
+      "generation_registry 保证会话生成互斥"
+    ] },
+    { "dot": "violet", "title": "数据与外部集成", "items": [
+      "SQLite 单库 13 张表；Skill 以文件为本体",
+      "API Key 经 Fernet 加密，主密钥不入库",
+      "GLM 经 OpenAI 兼容中转站；MCP stdio / HTTP；sanitize 脱敏"
+    ] }
+  ]
+}

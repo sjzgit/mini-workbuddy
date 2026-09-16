@@ -145,6 +145,7 @@ async def stream_chat_completion(
     enable_thinking: bool,
     tools: list[dict[str, Any]] | None = None,
     include_usage: bool = False,
+    read_timeout_seconds: int | None = None,
 ) -> AsyncIterator[ContentDelta | ReasoningDelta | ToolCallDelta | UsageInfo]:
     """流式对话补全：逐增量产出 ContentDelta / ReasoningDelta / ToolCallDelta / UsageInfo。
 
@@ -175,7 +176,7 @@ async def stream_chat_completion(
     )
     timeout = httpx.Timeout(
         connect=settings.chat_stream_connect_timeout_seconds,
-        read=settings.chat_stream_read_timeout_seconds,
+        read=read_timeout_seconds or settings.chat_stream_read_timeout_seconds,
         write=30.0,
         pool=30.0,
     )

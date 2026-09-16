@@ -4,13 +4,50 @@
  * 展示历史消息与生成中的流式占位；工具调用渲染过程卡片（ToolProcessCard）。
  * 终态后保留最近一轮 segments（卡片可回看，FR-023），对应回复消息从列表过滤。
  */
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
-import { useChatStore, type ToolCardSegment } from '@/stores/chat'
+import { message as antMessage } from 'ant-design-vue'
+
+import { useAgentsStore } from '@/stores/agents'
+import { useChatStore, type TextSegment, type ToolCardSegment } from '@/stores/chat'
+import { renderMarkdown } from '@/utils/markdown'
 import MessageBubble from './MessageBubble.vue'
 import ToolProcessCard from './ToolProcessCard.vue'
 
 const chat = useChatStore()
+const agentsStore = useAgentsStore()
+
+/** 当前会话选中的 Agent 名称（流式气泡标题）；无会话/找不到时回落"Agent" */
+const currentAgentName = computed(() => {
+  const agentId = chat.currentConversation?.agent_id
+  const name = agentId != null
+    ? agentsStore.items.find((a) => a.id === agentId)?.name
+    : undefined
+  return name || 'Agent'
+})
+
+/** 可见消息中最后一条 assistant（"重新生成"仅对其可见，与 MessageBubble 口径一致） */
+const lastAssistantId = computed(() => {
+  const list = visibleMessages.value
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i]?.role === 'assistant') return list[i]?.id ?? null
+  }
+  return null
+})
+
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    antMessage.success('已复制')
+  } catch {
+    antMessage.error('复制失败')
+  }
+}
+
+onMounted(() => {
+  // Agent 名称显示依赖候选列表（拉取失败不阻塞消息区）
+  void agentsStore.fetchAgents()
+})
 const container = ref<HTMLElement | null>(null)
 /** 用户是否主动上滚离开底部 */
 const userScrolledUp = ref(false)
@@ -83,6 +120,13 @@ watch(
 )
 
 watch(
+  // 历史回放异步到达后保持滚动位置（011 优化①）
+  () => chat.historyReplays,
+  () => void compensateOnResize(),
+  { deep: true },
+)
+
+watch(
   () => chat.currentId,
   () => {
     // 切换会话：回到底部跟随
@@ -104,33 +148,67 @@ watch(
       </div>
     </template>
     <template v-else>
-      <MessageBubble
-        v-for="(item, index) in visibleMessages"
-        :key="item.id"
-        :message="item"
-        :is-last-assistant="
-          item.role === 'assistant' &&
-          index === visibleMessages.length - 1 &&
-          chat.phase === 'idle'
-        "
-        @regenerate="chat.regenerate()"
-      />
+      <template v-for="(item, index) in visibleMessages" :key="item.id">
+        <!-- 011 优化①：有历史运行回放的 assistant 消息 → 还原思考/正文/工具卡片交错过程 -->
+        <div
+          v-if="item.role === 'assistant' && (chat.historyReplays[item.id]?.length ?? 0) > 0"
+          class="msg-row msg-agent"
+        >
+          <div class="msg-bubble">
+            <div class="msg-agent-name">{{ item.agent_name || currentAgentName }}</div>
+            <template v-for="(seg, si) in chat.historyReplays[item.id]" :key="segKey(seg, si)">
+              <details v-if="seg.kind === 'reasoning'" class="msg-reasoning">
+                <summary>思考过程</summary>
+                <div class="msg-reasoning-body">{{ seg.text }}</div>
+              </details>
+              <div
+              v-else-if="seg.kind === 'content'"
+              class="msg-content"
+              v-html="renderMarkdown((seg as TextSegment).text)"
+            ></div>
+              <ToolProcessCard v-else :card="(seg as ToolCardSegment)" @toggle="compensateOnResize" />
+            </template>
+            <!-- 操作区：复制 / 重新生成（悬停显示，与 MessageBubble 口径一致） -->
+            <div class="msg-actions">
+              <a class="msg-action" @click="copyText(item.content)">复制</a>
+              <a
+                v-if="item.id === lastAssistantId && chat.phase === 'idle'"
+                class="msg-action"
+                @click="chat.regenerate()"
+              >重新生成</a>
+            </div>
+          </div>
+        </div>
+        <MessageBubble
+          v-else
+          :message="item"
+          :is-last-assistant="
+            item.role === 'assistant' &&
+            index === visibleMessages.length - 1 &&
+            chat.phase === 'idle'
+          "
+          @regenerate="chat.regenerate()"
+        />
+      </template>
 
       <!-- 流式/最近一轮回复：片段按 Runtime 到达顺序渲染（思考/正文/工具卡片交错，FR-006） -->
       <div v-if="chat.segments.length > 0 || chat.phase !== 'idle'" class="msg-row msg-agent">
         <div class="msg-bubble">
-          <div class="msg-agent-name">{{ 'Agent' }}</div>
+          <div class="msg-agent-name">{{ currentAgentName }}</div>
           <div v-if="chat.segments.length === 0 && chat.phase === 'thinking'" class="msg-thinking">正在思考…</div>
           <template v-for="(seg, index) in chat.segments" :key="segKey(seg, index)">
             <details
               v-if="seg.kind === 'reasoning'"
               class="msg-reasoning"
-              open
             >
               <summary>思考过程</summary>
               <div class="msg-reasoning-body">{{ seg.text }}</div>
             </details>
-            <div v-else-if="seg.kind === 'content'" class="msg-content">{{ seg.text }}</div>
+            <div
+              v-else-if="seg.kind === 'content'"
+              class="msg-content"
+              v-html="renderMarkdown((seg as TextSegment).text)"
+            ></div>
             <ToolProcessCard v-else :card="(seg as ToolCardSegment)" @toggle="compensateOnResize" />
           </template>
           <div v-if="chat.phase === 'generating'" class="msg-generating">正在生成…</div>
@@ -220,6 +298,80 @@ watch(
   font-size: 13px;
   color: var(--text-secondary);
   white-space: pre-wrap;
+}
+
+.msg-actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 12px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.msg-row:hover .msg-actions {
+  opacity: 1;
+}
+
+.msg-action {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--accent);
+  }
+}
+
+.msg-content {
+  :deep(p) {
+    margin: 0 0 8px;
+
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+
+  :deep(pre) {
+    background: var(--bg-deep);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    margin: 8px 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  :deep(code) {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    background: var(--bg-deep);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  :deep(pre code) {
+    background: none;
+    padding: 0;
+  }
+
+  :deep(table) {
+    border-collapse: collapse;
+    margin: 8px 0;
+
+    th,
+    td {
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      font-size: 13px;
+    }
+  }
+
+  :deep(a) {
+    color: var(--accent);
+  }
 }
 
 .msg-thinking,

@@ -395,3 +395,55 @@ class TestDisabledBinding:
         )
         assert response.status_code == 200, response.text
         assert _detail(client, created["id"])["bindings"] == []
+
+
+class TestCompactConfig:
+    """011：Agent 压缩配置四字段（contracts/agent-compression-config.md）。"""
+
+    def test_defaults_and_roundtrip(self, client, db_session, seed_model) -> None:
+        payload = {
+            "name": "压缩 Agent", "model_id": seed_model.id,
+            "system_prompt": "", "max_rounds": 3,
+        }
+        resp = client.post("/api/agents", json=payload)
+        assert resp.status_code == 201
+        detail = client.get(f"/api/agents/{resp.json()['id']}").json()
+        assert detail["auto_compact"] is True
+        assert detail["compact_trigger_ratio"] == 0.8
+        assert detail["compact_keep_recent_rounds"] == 5
+        assert detail["compact_summary_target_tokens"] == 1000
+
+    def test_save_and_reload(self, client, db_session, seed_model, seed_agent) -> None:
+        body = {
+            "name": seed_agent.name, "model_id": seed_model.id,
+            "system_prompt": seed_agent.system_prompt,
+            "max_rounds": 3,
+            "auto_compact": False,
+            "compact_trigger_ratio": 0.6,
+            "compact_keep_recent_rounds": 3,
+            "compact_summary_target_tokens": 500,
+        }
+        resp = client.put(f"/api/agents/{seed_agent.id}", json=body)
+        assert resp.status_code in (200, 201)
+        detail = client.get(f"/api/agents/{seed_agent.id}").json()
+        assert detail["auto_compact"] is False
+        assert detail["compact_trigger_ratio"] == 0.6
+        assert detail["compact_keep_recent_rounds"] == 3
+        assert detail["compact_summary_target_tokens"] == 500
+
+    @pytest.mark.parametrize("field,value", [
+        ("compact_trigger_ratio", 0.3),
+        ("compact_trigger_ratio", 0.99),
+        ("compact_keep_recent_rounds", 0),
+        ("compact_keep_recent_rounds", 99),
+        ("compact_summary_target_tokens", 50),
+        ("compact_summary_target_tokens", 9999),
+    ])
+    def test_invalid_values_422(self, client, db_session, seed_model, seed_agent, field, value) -> None:
+        body = {
+            "name": seed_agent.name, "model_id": seed_model.id,
+            "system_prompt": seed_agent.system_prompt,
+            "max_rounds": 3, field: value,
+        }
+        resp = client.put(f"/api/agents/{seed_agent.id}", json=body)
+        assert resp.status_code == 422

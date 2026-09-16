@@ -43,11 +43,20 @@ from app.services.generation_registry import (
 from app.schemas.agent_runtime import RunCompletedData
 from app.services.agent_runtime import RunHistoryMessage, RunLimits, RunRequest, execute_run
 from app.services.agent_runtime import events as runtime_event_names
+from app.services.agent_runtime.events import RunEvent
 
 logger = logging.getLogger(__name__)
 
 # 每条消息的 token 开销系数粗估（role 包裹开销，research R3）
 _CONTEXT_MSG_OVERHEAD = 4
+
+# 011：SSE 转发前从事件 data 剥离的 Recorder 透传字段（契约 runtime-events-011.md §2.2；
+# run_completed 的 content_text/reasoning_text 本就不进 SSE，一并列入防御）
+_SSE_STRIP_KEYS = frozenset({
+    "params_full", "result_full", "request_messages",
+    "output_content", "output_reasoning", "output_tool_calls", "output_full",
+    "input_full", "content_text", "reasoning_text",
+})
 
 # 契约错误文案（路由层/流内原样展示，FR-023）
 MSG_AGENT_UNAVAILABLE = "该 Agent 已不可用，请重新选择 Agent"
@@ -124,16 +133,18 @@ def _to_message_out(entry: MessageEntry) -> MessageOut:
 
 
 def _estimate_tokens(text: str) -> int:
-    """字符级 token 估算（research R3：ceil(chars × 0.6)）。"""
-    return ceil(len(text) * 0.6)
+    """字符级 token 估算（011 起统一走 compression 共享口径，FR-024）。"""
+    from app.services.agent_runtime.compression import estimate_text_tokens
+
+    return estimate_text_tokens(text)
 
 
 def _estimate_context_tokens(messages: list[dict[str, str]], system: str) -> int:
     """上下文总 token 估算：system + 每条消息（content + role 开销）。"""
-    total = ceil(len(system) * 0.6)
-    for message in messages:
-        total += _estimate_tokens(message["content"]) + _CONTEXT_MSG_OVERHEAD
-    return total
+    from app.services.agent_runtime.compression import estimate_messages_tokens, estimate_text_tokens
+
+    total = estimate_text_tokens(system)
+    return total + estimate_messages_tokens(messages)
 
 
 def _get_or_404(session: Session, conversation_id: int) -> ConversationEntry:
@@ -283,10 +294,13 @@ async def _run_generation(
         return
     from app.schemas.agent_runtime import RunCompletedData
 
-    # 有效历史（FR-017）：user 全部 + completed assistant，seq 升序
+    # 有效历史（FR-017）：user 全部 + completed assistant，seq 升序；011 附带 seq 供压缩边界
     with SessionLocal() as session:
         history_rows = _effective_history(session, conversation_id)
-        history = [RunHistoryMessage(role=row.role, content=row.content) for row in history_rows]
+        history = [
+            RunHistoryMessage(role=row.role, content=row.content, seq=row.seq)
+            for row in history_rows
+        ]
 
     request = RunRequest(
         agent_id=agent_id,
@@ -295,6 +309,8 @@ async def _run_generation(
         limits=RunLimits(),
         cancel=cancel_event or asyncio.Event(),
         run_id=run_id,
+        conversation_id=conversation_id,
+        reply_message_id=reply_message_id,
     )
     stopped = False
     error_category: str | None = None
@@ -302,8 +318,11 @@ async def _run_generation(
     completed: "RunCompletedData | None" = None
     content_buffer: list[str] = []
     reasoning_buffer: list[str] = []
+    from collections.abc import AsyncGenerator
+
+    generator: AsyncGenerator[RunEvent, None] = execute_run(request)  # type: ignore[assignment]
     try:
-        async for event in execute_run(request):
+        async for event in generator:
             if event.event == runtime_event_names.EVENT_REASONING_DELTA:
                 task.publish(StreamEvent(
                     event=EVENT_REASONING,
@@ -330,11 +349,19 @@ async def _run_generation(
                 runtime_event_names.EVENT_RUN_STARTED,
                 runtime_event_names.EVENT_TOOL_CALL_STARTED,
                 runtime_event_names.EVENT_TOOL_CALL_COMPLETED,
+                runtime_event_names.EVENT_COMPRESSION_STARTED,
+                runtime_event_names.EVENT_COMPRESSION_COMPLETED,
+                runtime_event_names.EVENT_COMPRESSION_FAILED,
+                runtime_event_names.EVENT_COMPRESSION_FALLBACK,
             ):
-                # 工具事件按契约 §3 原样转发（run_id/seq/round/call_id/工具名/类型/摘要）
+                # 工具/压缩事件按契约原样转发（剥离 Recorder 透传字段后）
+                payload = {
+                    k: v for k, v in event.data.items()
+                    if k not in _SSE_STRIP_KEYS
+                }
                 task.publish(StreamEvent(
                     event=event.event,
-                    data=json.dumps(event.data, ensure_ascii=False),
+                    data=json.dumps(payload, ensure_ascii=False),
                 ))
             elif event.event == runtime_event_names.EVENT_ERROR:
                 error_category = str(event.data.get("category", "unknown"))
@@ -347,6 +374,10 @@ async def _run_generation(
         logger.exception("runtime 桥接异常 conversation=%s", conversation_id)
         error_category = error_category or "unknown"
         error_text = error_text or _STREAM_ERROR_MESSAGES["unknown"]
+    finally:
+        # 显式关闭事件生成器：CancelledError 等路径立即触发 GeneratorExit，
+        # RunRecorder 在同栈内完成收尾（不依赖 GC 时机，FR-007）
+        await generator.aclose()
 
     await _finalize_generation(
         conversation_id, reply_message_id, completed,
@@ -551,15 +582,29 @@ def _assert_context_fits(
 
     extra_content 为待落库的本条用户消息（估算时需计入）。
     """
+    from app.services.agent_runtime.compression import (
+        available_input_tokens,
+        estimate_messages_tokens,
+        estimate_text_tokens,
+    )
+
     model = session.get(ModelEntry, agent.model_id)
     if model is None:
         raise AgentUnavailableError("该 Agent 绑定的模型已不可用，请重新选择 Agent")
-    llm_messages = _build_llm_messages(session, conversation, agent)
+    available = available_input_tokens(model.context_length, model.max_output_tokens)
+    # 压缩无法减少的部分：系统提示词 + 本次输入（FR-039 首发即超的入口拦截）
+    fixed = estimate_text_tokens(agent.system_prompt) + _CONTEXT_MSG_OVERHEAD
     if extra_content:
-        llm_messages.append({"role": "user", "content": extra_content})
-    estimated = _estimate_context_tokens(llm_messages, "") + model.max_output_tokens
-    if estimated > model.context_length:
+        fixed += estimate_text_tokens(extra_content) + _CONTEXT_MSG_OVERHEAD
+    if fixed > available:
         raise ContextOverflowError(CONTEXT_OVERFLOW_DETAIL)
+    if not bool(getattr(agent, "auto_compact", True)):
+        # 关闭自动压缩：历史不会压缩，须全量校验（FR-027）
+        llm_messages = _build_llm_messages(session, conversation, agent)
+        if extra_content:
+            llm_messages.append({"role": "user", "content": extra_content})
+        if estimate_messages_tokens(llm_messages) > available:
+            raise ContextOverflowError(CONTEXT_OVERFLOW_DETAIL)
 
 
 
@@ -679,15 +724,11 @@ async def build_message_stream(
                 saw_terminal = True
                 return
     except GeneratorExit:
-        # 客户端断开（关闭页面/连接中断）：由聊天接口触发取消（FR-027），
-        # Runtime 自身不监听连接；SPA 内切换会话不断流（008 FR-022 不受影响）。
-        if not saw_terminal and task.terminal_event is None:
-            task.cancel_event.set()
+        # 011 后台运行（契约 runtime-events-011.md §4）：客户端断开不取消，
+        # 任务继续在后台执行，终态照常落库并写入原运行记录（FR-006）。
         raise
     finally:
         task.unsubscribe(queue)
-        if not saw_terminal and task.terminal_event is None:
-            task.cancel_event.set()  # 兜底：订阅提前退出且无终态 → 协作取消
 
 
 def _sse_frame(event: StreamEvent) -> str:

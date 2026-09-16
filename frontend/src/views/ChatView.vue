@@ -5,6 +5,9 @@
  * 挂载时加载会话列表并恢复上次活跃会话（US2 刷新恢复）。
  */
 import { onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+
+import { Button } from 'ant-design-vue'
 
 import ChatComposer from '@/components/chat/ChatComposer.vue'
 import ChatMessages from '@/components/chat/ChatMessages.vue'
@@ -12,6 +15,13 @@ import ConversationSidebar from '@/components/chat/ConversationSidebar.vue'
 import { useChatStore } from '@/stores/chat'
 
 const chat = useChatStore()
+const router = useRouter()
+
+function openRuns(): void {
+  if (chat.currentId != null) {
+    void router.push(`/runs?conversation_id=${chat.currentId}`)
+  }
+}
 
 onMounted(async () => {
   await chat.fetchConversations()
@@ -30,6 +40,15 @@ onMounted(async () => {
     <section class="chat-main">
       <header class="chat-header">
         <h1 class="chat-header-title">{{ chat.currentConversation?.title ?? '聊天' }}</h1>
+        <Button
+          v-if="chat.currentId != null"
+          type="text"
+          size="small"
+          class="chat-header-runs"
+          @click="openRuns"
+        >
+          运行记录
+        </Button>
       </header>
       <ChatMessages />
       <ChatComposer />
@@ -56,10 +75,18 @@ onMounted(async () => {
   background: var(--bg-surface);
 }
 
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .chat-header-title {
   font-size: 22px;
   font-weight: 650;
   color: var(--text-primary);
   margin: 0;
 }
+
+.chat-header-runs { color: var(--text-secondary); }
 </style>

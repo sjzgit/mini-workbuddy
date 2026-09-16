@@ -19,6 +19,18 @@ export const MAX_ROUNDS_MAX = 100
 export const ENABLE_DEEP_THINKING_DEFAULT = false
 export const THINKING_LEVEL_DEFAULT: ThinkingLevel = 'off'
 
+/** 上下文压缩配置常量（specs/011 contracts/agent-compression-config.md） */
+export const AUTO_COMPACT_DEFAULT = true
+export const COMPACT_TRIGGER_RATIO_DEFAULT = 0.8
+export const COMPACT_TRIGGER_RATIO_MIN = 0.5
+export const COMPACT_TRIGGER_RATIO_MAX = 0.95
+export const COMPACT_KEEP_ROUNDS_DEFAULT = 5
+export const COMPACT_KEEP_ROUNDS_MIN = 1
+export const COMPACT_KEEP_ROUNDS_MAX = 50
+export const COMPACT_SUMMARY_TARGET_DEFAULT = 1000
+export const COMPACT_SUMMARY_TARGET_MIN = 100
+export const COMPACT_SUMMARY_TARGET_MAX = 8000
+
 /** 绑定项（详情返回；enabled=false → 前端标"已停用，不可用"） */
 export interface BindingItem {
   resource_type: ResourceType
@@ -86,6 +98,10 @@ export interface AgentDetail {
   max_rounds: number
   enable_deep_thinking: boolean
   thinking_level: ThinkingLevel
+  auto_compact: boolean
+  compact_trigger_ratio: number
+  compact_keep_recent_rounds: number
+  compact_summary_target_tokens: number
   is_default: boolean
   updated_at: string
 }
@@ -121,6 +137,10 @@ export interface AgentSaveRequest {
   max_rounds?: number
   enable_deep_thinking?: boolean
   thinking_level?: ThinkingLevel
+  auto_compact?: boolean
+  compact_trigger_ratio?: number
+  compact_keep_recent_rounds?: number
+  compact_summary_target_tokens?: number
   is_default?: boolean
   bindings?: BindingRef[]
 }

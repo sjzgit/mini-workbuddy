@@ -25,6 +25,10 @@ vi.mock('@/api/chat', () => ({
   openStream: openStreamMock,
 }))
 
+const runsApiMock = vi.hoisted(() => ({
+  conversationReplays: vi.fn(),
+}))
+vi.mock('@/api/runs', () => ({ runsApi: runsApiMock }))
 vi.mock('@/stores/agents', () => ({
   useAgentsStore: () => ({ items: [], fetchAgents: vi.fn() }),
 }))
@@ -466,5 +470,45 @@ describe('chat store — 010 工具过程展示', () => {
     await chat.loadMessages(2)
     expect(openStreamMock).not.toHaveBeenCalled()
     expect(chat.segments).toHaveLength(0)
+  })
+})
+
+
+describe('chat store 历史运行回放（011 优化①）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('loadMessages 拉取回放并按 replyMessageId 映射为片段', async () => {
+    runsApiMock.conversationReplays.mockResolvedValue([
+      {
+        run_id: 'r1', reply_message_id: 42, status: 'succeeded',
+        items: [
+          { kind: 'reasoning', round: 1, text: '想想' },
+          { kind: 'content', round: 1, text: '查询中' },
+          { kind: 'tool', round: 1, callId: 't1', toolName: 'current_time', displayName: '当前时间',
+            toolType: 'builtin', serverName: null, status: 'success', durationMs: 5,
+            paramsSummary: '{}', resultSummary: '12:00', paramsText: '{}', resultText: '12:00' },
+          { kind: 'content', round: 2, text: '现在是 12:00' },
+        ],
+      },
+    ])
+    chatApiMock.messages.mockResolvedValue([makeMessage({ id: 42, role: 'assistant', content: '现在是 12:00' })])
+    const store = useChatStore()
+    await store.selectConversation(7)
+    const segments = store.historyReplays[42] ?? []
+    expect(segments).toHaveLength(4)
+    expect(segments[0]).toMatchObject({ kind: 'reasoning', text: '想想' })
+    expect(segments[2]).toMatchObject({ kind: 'tool', callId: 't1', status: 'success', resultText: '12:00' })
+    expect(segments[3]).toMatchObject({ kind: 'content', text: '现在是 12:00' })
+  })
+
+  it('回放接口失败时降级为空映射（不阻塞消息展示）', async () => {
+    runsApiMock.conversationReplays.mockRejectedValue(new Error('network'))
+    chatApiMock.messages.mockResolvedValue([makeMessage({ id: 43, role: 'assistant' })])
+    const store = useChatStore()
+    await store.selectConversation(7)
+    expect(store.historyReplays[43]).toBeUndefined()
   })
 })

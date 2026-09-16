@@ -10,6 +10,10 @@ import type { Rule } from 'ant-design-vue/es/form'
 
 import {
   ENABLE_DEEP_THINKING_DEFAULT,
+  AUTO_COMPACT_DEFAULT,
+  COMPACT_KEEP_ROUNDS_DEFAULT,
+  COMPACT_SUMMARY_TARGET_DEFAULT,
+  COMPACT_TRIGGER_RATIO_DEFAULT,
   MAX_ROUNDS_DEFAULT,
   THINKING_LEVEL_DEFAULT,
   agentsApi,
@@ -46,6 +50,10 @@ const form = reactive({
   maxRounds: MAX_ROUNDS_DEFAULT,
   enableDeepThinking: ENABLE_DEEP_THINKING_DEFAULT,
   thinkingLevel: THINKING_LEVEL_DEFAULT as ThinkingLevel,
+  autoCompact: AUTO_COMPACT_DEFAULT,
+  compactTriggerRatio: COMPACT_TRIGGER_RATIO_DEFAULT,
+  compactKeepRounds: COMPACT_KEEP_ROUNDS_DEFAULT,
+  compactSummaryTarget: COMPACT_SUMMARY_TARGET_DEFAULT,
   isDefault: false,
 })
 
@@ -130,6 +138,10 @@ function applyDetail(detail: AgentDetail): void {
   form.maxRounds = detail.max_rounds
   form.enableDeepThinking = detail.enable_deep_thinking
   form.thinkingLevel = detail.thinking_level
+  form.autoCompact = detail.auto_compact
+  form.compactTriggerRatio = detail.compact_trigger_ratio
+  form.compactKeepRounds = detail.compact_keep_recent_rounds
+  form.compactSummaryTarget = detail.compact_summary_target_tokens
   form.isDefault = detail.is_default
   versions.value = detail.prompt_versions
   currentVersion.value = detail.prompt_versions.at(-1)?.version ?? null
@@ -252,6 +264,10 @@ async function handlePublish(): Promise<void> {
         max_rounds: form.maxRounds,
         enable_deep_thinking: form.enableDeepThinking,
         thinking_level: form.thinkingLevel,
+        auto_compact: form.autoCompact,
+        compact_trigger_ratio: form.compactTriggerRatio,
+        compact_keep_recent_rounds: form.compactKeepRounds,
+        compact_summary_target_tokens: form.compactSummaryTarget,
         is_default: form.isDefault,
         bindings: [
           ...[...selectedToolIds.value].map((id) => ({ resource_type: 'tool' as const, resource_id: id })),
@@ -361,6 +377,10 @@ function handleClose(): void {
               v-model:max-rounds="form.maxRounds"
               v-model:enable-deep-thinking="form.enableDeepThinking"
               v-model:thinking-level="form.thinkingLevel"
+              v-model:auto-compact="form.autoCompact"
+              v-model:compact-trigger-ratio="form.compactTriggerRatio"
+              v-model:compact-keep-rounds="form.compactKeepRounds"
+              v-model:compact-summary-target="form.compactSummaryTarget"
               @select-model="(id) => { form.modelId = id; showModelError = false }"
               @toggle-tool="onToggleTool"
               @toggle-skill="onToggleSkill"

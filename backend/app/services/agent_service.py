@@ -1,3 +1,4 @@
+from decimal import Decimal
 """Agent 管理业务逻辑：CRUD、提示词版本、默认一致性、删除流程、候选聚合。
 
 规则来源：specs/007-agent-management/spec.md（FR-001~031）+ research.md R1–R8。
@@ -187,6 +188,10 @@ def _to_detail(session: Session, entry: AgentEntry) -> AgentDetail:
         max_rounds=entry.max_rounds,
         enable_deep_thinking=entry.enable_deep_thinking,
         thinking_level=entry.thinking_level,
+        auto_compact=bool(entry.auto_compact),
+        compact_trigger_ratio=float(entry.compact_trigger_ratio),
+        compact_keep_recent_rounds=int(entry.compact_keep_recent_rounds),
+        compact_summary_target_tokens=int(entry.compact_summary_target_tokens),
         is_default=entry.is_default,
         updated_at=entry.updated_at.isoformat(),
     )
@@ -305,6 +310,10 @@ def save_agent(session: Session, payload: AgentSaveRequest, agent_id: int | None
             max_rounds=payload.max_rounds,
             enable_deep_thinking=payload.enable_deep_thinking,
             thinking_level=payload.thinking_level,
+            auto_compact=payload.auto_compact,
+            compact_trigger_ratio=Decimal(str(payload.compact_trigger_ratio)),
+            compact_keep_recent_rounds=payload.compact_keep_recent_rounds,
+            compact_summary_target_tokens=payload.compact_summary_target_tokens,
         )
         session.add(entry)
         session.flush()  # 取 id
@@ -322,6 +331,10 @@ def save_agent(session: Session, payload: AgentSaveRequest, agent_id: int | None
         entry.max_rounds = payload.max_rounds
         entry.enable_deep_thinking = payload.enable_deep_thinking
         entry.thinking_level = payload.thinking_level
+        entry.auto_compact = payload.auto_compact
+        entry.compact_trigger_ratio = Decimal(str(payload.compact_trigger_ratio))
+        entry.compact_keep_recent_rounds = payload.compact_keep_recent_rounds
+        entry.compact_summary_target_tokens = payload.compact_summary_target_tokens
         latest_version = session.scalar(
             select(AgentPromptVersion)
             .where(AgentPromptVersion.agent_id == entry.id)

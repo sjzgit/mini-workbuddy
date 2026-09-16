@@ -17,6 +17,7 @@ import {
   type StreamEvent,
 } from '@/api/chat'
 import { ApiError } from '@/api/request'
+import { runsApi } from '@/api/runs'
 import { useAgentsStore } from '@/stores/agents'
 
 /** 生成状态：空闲 → 思考中（已发送未收到输出）→ 生成中（正文流式追加）→ 调用工具 */
@@ -90,6 +91,8 @@ export const useChatStore = defineStore('chat', () => {
   const runStates = ref<Record<number, RunDisplayState>>({})
   /** 按 replyMessageId 登记：防止同一运行重复订阅（双连接双倍事件） */
   const activeStreams = new Set<number>()
+  /** 历史运行回放（011 优化①）：replyMessageId → 交错片段（思考/正文/工具卡片），刷新后还原过程 */
+  const historyReplays = ref<Record<number, StreamSegment[]>>({})
 
   /** 当前查看会话的运行槽（无槽返回稳定空槽） */
   const currentRun = computed<RunDisplayState>(() => {
@@ -165,6 +168,8 @@ export const useChatStore = defineStore('chat', () => {
     messagesLoading.value = true
     try {
       messages.value = await chatApi.messages(id)
+      // 011 优化①：拉取历史运行回放，重建工具卡片与思考/正文交错展示
+      void loadReplays(id)
       // 恢复订阅（FR-022 重放重建）：仅当该运行无活跃订阅时；已有活跃流则槽内
       // 状态持续更新中，切回即见最新（Q2 无缝续播，不重复建连接）
       const existing = runStates.value[id]
@@ -182,6 +187,40 @@ export const useChatStore = defineStore('chat', () => {
       }
     } finally {
       messagesLoading.value = false
+    }
+  }
+
+  /** 拉取会话历史运行回放并转为展示片段；失败降级为纯文本历史（不阻塞消息展示） */
+  async function loadReplays(conversationId: number): Promise<void> {
+    try {
+      const replays = await runsApi.conversationReplays(conversationId)
+      const map: Record<number, StreamSegment[]> = {}
+      for (const replay of replays) {
+        if (replay.reply_message_id === null) continue
+        map[replay.reply_message_id] = replay.items.map((item): StreamSegment => {
+          if (item.kind === 'tool') {
+            return {
+              kind: 'tool',
+              round: item.round ?? 0,
+              callId: item.callId,
+              toolName: item.toolName,
+              displayName: item.displayName,
+              toolType: item.toolType,
+              serverName: item.serverName,
+              status: item.status,
+              durationMs: item.durationMs,
+              paramsSummary: item.paramsSummary,
+              resultSummary: item.resultSummary,
+              paramsText: item.paramsText,
+              resultText: item.resultText,
+            }
+          }
+          return { kind: item.kind, round: item.round ?? 0, text: item.text }
+        })
+      }
+      historyReplays.value = map
+    } catch {
+      historyReplays.value = {}
     }
   }
 
@@ -452,6 +491,7 @@ export const useChatStore = defineStore('chat', () => {
     createConversation,
     selectConversation,
     loadMessages,
+    historyReplays,
     selectAgent,
     send,
     regenerate,

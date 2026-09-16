@@ -19,6 +19,11 @@ EVENT_TOOL_CALL_STARTED = "tool_call_started"
 EVENT_TOOL_CALL_COMPLETED = "tool_call_completed"
 EVENT_ERROR = "error"
 EVENT_RUN_COMPLETED = "run_completed"
+# ---- 011 增补：上下文压缩事件（contracts/runtime-events-011.md §1）----
+EVENT_COMPRESSION_STARTED = "compression_started"
+EVENT_COMPRESSION_COMPLETED = "compression_completed"
+EVENT_COMPRESSION_FAILED = "compression_failed"
+EVENT_COMPRESSION_FALLBACK = "compression_fallback"
 
 # ---- 复合字面量 ----
 
@@ -26,6 +31,12 @@ ModelRequestStatusLiteral = Literal["ok", "error", "cancelled"]
 ToolTypeLiteral = Literal["builtin", "mcp", "skill"]
 ToolCallStatusLiteral = Literal["success", "error", "denied", "cancelled"]
 RunStatusLiteral = Literal["completed", "max_rounds", "error", "cancelled"]
+# ---- 011 增补 ----
+ModelRequestPurposeLiteral = Literal["chat", "context_compression"]
+CompressionTriggerLiteral = Literal["threshold", "precheck"]
+CompressionFailureLiteral = Literal[
+    "timeout", "model_error", "empty_summary", "save_failed", "cancelled",
+]
 
 
 class UsageInfo(BaseModel):
@@ -55,6 +66,9 @@ class RunStartedData(BaseModel):
 
     agent_id: int
     agent_name: str
+    # ---- 011 增补：模型名称快照（runs 表快照字段来源）----
+    model_name: str = ""
+    model_identifier: str = ""
 
 
 class ModelRequestStartedData(BaseModel):
@@ -62,6 +76,8 @@ class ModelRequestStartedData(BaseModel):
 
     round: int
     call_id: str
+    # ---- 011 增补：请求用途（压缩请求计入模型调用统计并标记用途，FR-045）----
+    purpose: ModelRequestPurposeLiteral = "chat"
 
 
 class DeltaData(BaseModel):
@@ -80,6 +96,13 @@ class ModelRequestCompletedData(BaseModel):
     status: ModelRequestStatusLiteral
     duration_ms: int
     usage: UsageInfo | None = None
+    # ---- 011 增补 ----
+    purpose: ModelRequestPurposeLiteral = "chat"
+    # Recorder 透传字段（SSE 转发时剥离，契约 runtime-events-011.md §2.2）：
+    request_messages: list[dict[str, Any]] | None = None  # 该次请求完整 messages
+    output_content: str | None = None  # 该次响应正文全文
+    output_reasoning: str | None = None  # 该次响应思考全文
+    output_tool_calls: list[dict[str, str]] | None = None  # 该次响应的工具调用（name+arguments）
 
 
 class ToolCallStartedData(BaseModel):
@@ -95,6 +118,8 @@ class ToolCallStartedData(BaseModel):
     params: str = ""  # 完整参数文本，超 runtime_tool_params_max_chars 截断 + 截断标记
     display_name: str = ""  # 易读名：builtin=注册表 display_name；mcp=原工具名；skill="加载 Skill"
     server_name: str | None = None  # MCP Server 显示名，仅 tool_type=mcp 非空
+    # ---- 011 增补（Recorder 透传，SSE 剥离；完整保存进 run_payloads，不截断）----
+    params_full: str = ""
 
 
 class ToolCallCompletedData(BaseModel):
@@ -111,6 +136,8 @@ class ToolCallCompletedData(BaseModel):
     result: str = ""  # 完整结果文本：成功=result_for_model；失败=人话原因（无堆栈）；超限截断 + 标记
     display_name: str = ""
     server_name: str | None = None
+    # ---- 011 增补（Recorder 透传，SSE 剥离；完整保存进 run_payloads，不截断）----
+    result_full: str = ""
 
 
 class ErrorEventData(BaseModel):
@@ -133,3 +160,50 @@ class RunCompletedData(BaseModel):
     reasoning_text: str | None = None
     message: dict[str, Any] | None = None  # MessageOut(008) 形态；桥接层回填，占位行被删时 None
     stopped: bool = False
+
+
+# ---- 011 增补：上下文压缩事件负载（contracts/runtime-events-011.md §1）----
+
+
+class CompressionStartedData(BaseModel):
+    """event: compression_started：一轮压缩尝试开始。"""
+
+    trigger_reason: CompressionTriggerLiteral
+    estimated_input_tokens: int  # 估算口径（FR-024，非实际用量）
+    available_input_tokens: int
+    trigger_ratio: float
+    # ---- 011 Recorder 透传（SSE 转发时剥离）----
+    input_full: str = ""  # 摘要请求完整输入文本（提示词+待压缩内容）
+
+
+class CompressionCompletedData(BaseModel):
+    """event: compression_completed：摘要生成并写回成功。"""
+
+    estimated_tokens_before: int
+    estimated_tokens_after: int
+    messages_compressed: int
+    groups_compressed: int
+    kept_rounds: int
+    summary_estimated_tokens: int
+    batches: int
+    duration_ms: int
+    boundary_seq: int
+    # ---- 011 Recorder 透传（SSE 转发时剥离）----
+    output_full: str = ""  # 最终摘要全文
+
+
+class CompressionFailedData(BaseModel):
+    """event: compression_failed：摘要请求超时/模型错误/空摘要/写回失败/取消。"""
+
+    reason: CompressionFailureLiteral
+    estimated_tokens_before: int
+    duration_ms: int
+
+
+class CompressionFallbackData(BaseModel):
+    """event: compression_fallback：转入备用裁剪（只影响本次请求，边界不变）。"""
+
+    reason: str
+    dropped_groups: int
+    kept_groups: int
+    estimated_tokens_after: int

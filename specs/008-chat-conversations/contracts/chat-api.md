@@ -180,3 +180,11 @@ STREAM_PING_INTERVAL_SECONDS = 15   SSE 心跳注释行间隔
 - 新增事件：`run_started`、`model_request_started`、`model_request_completed`、`tool_call_started`、`tool_call_completed`；`reasoning_delta` / `content_delta` / `error` 保留原名。
 - 全部事件 data 追加公共字段 `run_id`、`seq`（运行内从 1 递增）；模型请求与工具调用事件带 `round`、`call_id`。
 - HTTP 端点（列表/新建/切换/消息/发送/流/停止/重新生成）路径与请求响应结构不变；流订阅端点的事件集以 009 契约 §2 为准。
+
+## 011 修订记录（specs/011-context-compression-run-records）
+
+> 自 011 阶段（上下文压缩与运行记录可观测）起，本契约有以下修订，详见 `specs/011-context-compression-run-records/contracts/runtime-events-011.md` §4：
+
+- **连接断开不再取消生成**：订阅断开（页面关闭/网络中断）后任务继续在后台执行，终态照常落库；重新订阅按原重放语义续播（自动续播）。用户主动停止仍走 `POST .../stop`。
+- 发送/重新生成的 422 上下文超限文案增补"开启自动压缩"指引（Agent 开启压缩时历史由运行时压缩兜底，前置校验仅拦截固定内容与本次输入）。
+- 流事件集继续以 009 契约（含 010/011 增补）为准：新增 `compression_started` / `compression_completed` / `compression_failed` / `compression_fallback` 事件转发（前端可忽略）。

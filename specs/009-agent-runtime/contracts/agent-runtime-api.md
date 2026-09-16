@@ -4,6 +4,7 @@
 > 前后端只消费本契约，禁止各自硬编码。字段命名 snake_case；SSE 帧格式与 008 一致（`event: <名>\ndata: <json>\n\n`）。
 > 对 008 `chat-api.md` 的修订：终端事件 `done` 由 `run_completed` 取代（§5），其余 HTTP 端点语义不变。
 > 对本文的 010 增补：`tool_call_started` / `tool_call_completed` 增补 `params` / `result` / `display_name` / `server_name` 字段（见 §2/§3 标注），用于聊天页工具过程卡片展示；日志仍只用脱敏摘要（FR-037 日志部分不变）。增补 diff 视图见 `specs/010-tool-execution-display/contracts/display-events.md`。
+> 对本文的 011 增补与修订：①新增 4 种压缩事件（compression_started/completed/failed/fallback）；②model_request_* 增 `purpose` 字段、tool_call_* 增 `params_full`/`result_full` 透传字段、compression_* 增 `input_full`/`output_full` 透传字段（SSE 前剥离）；③RunStartedData 增 `model_name`/`model_identifier`；④RunRequest 增 `conversation_id`/`reply_message_id`、RunHistoryMessage 增 `seq`；⑤**修订** §7"连接断开→取消"废止（后台运行）。主定义见 `specs/011-context-compression-run-records/contracts/runtime-events-011.md`。
 
 ## 1. 标识约定
 

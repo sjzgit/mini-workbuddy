@@ -7,7 +7,7 @@
 
 | 工具 | 版本 |
 |------|------|
-| Node.js | ≥ 22.18（本机 nvm 目录：`%APPDATA%\nvm\v22.20.0`） |
+| Node.js | ≥ 22.18 |
 | npm | ≥ 10 |
 | uv | ≥ 0.11（Python 3.12 由 uv 管理，无需单独安装） |
 
@@ -47,14 +47,6 @@ npm run dev
 - **授权目录**：文件读写工具只能访问 `backend/workspace/`（首次使用自动创建，已加入 `.gitignore`）；可用环境变量 `AUTHORIZED_DIR` 覆盖
 - **危险命令拦截**：Shell 工具在执行层拦截六类危险命令（递归删除系统目录、格式化磁盘、修改关键系统权限、关闭安全防护、读取并外传密钥、直接执行远程下载的脚本），拦截先于实际执行
 - **执行上限**：命令超时 60 秒（`SHELL_TIMEOUT_SECONDS`）、输出截断 20000 字符（`SHELL_OUTPUT_MAX_CHARS`）、单文件 1MB（`FILE_MAX_BYTES`）、默认时区 `Asia/Shanghai`（`DEFAULT_TIMEZONE`）
-
-### Windows + nvm 提示
-
-若默认 Node 版本低于 22，前端命令这样执行：
-
-```bash
-cmd /c "set PATH=%APPDATA%\nvm\v22.20.0;%PATH% && npm install && npm run dev"
-```
 
 ## 目录一览
 

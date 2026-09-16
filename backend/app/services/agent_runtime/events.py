@@ -11,6 +11,10 @@ from pydantic import BaseModel
 
 # 事件类型常量（与 schemas/agent_runtime.py 保持同一来源）
 from app.schemas.agent_runtime import (
+    EVENT_COMPRESSION_COMPLETED,
+    EVENT_COMPRESSION_FAILED,
+    EVENT_COMPRESSION_FALLBACK,
+    EVENT_COMPRESSION_STARTED,
     EVENT_CONTENT_DELTA,
     EVENT_ERROR,
     EVENT_MODEL_REQUEST_COMPLETED,
@@ -23,6 +27,10 @@ from app.schemas.agent_runtime import (
 )
 
 __all__ = [
+    "EVENT_COMPRESSION_COMPLETED",
+    "EVENT_COMPRESSION_FAILED",
+    "EVENT_COMPRESSION_FALLBACK",
+    "EVENT_COMPRESSION_STARTED",
     "RunEvent",
     "RunEventEmitter",
     "EVENT_RUN_STARTED",

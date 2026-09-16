@@ -230,10 +230,11 @@ class FakeStream:
 @pytest.fixture
 def fake_stream(monkeypatch: pytest.MonkeyPatch) -> FakeStream:
     """替换 runtime.stream_chat_completion 引用为假流（009 起模型调用经 Agent Runtime）。"""
-    from app.services.agent_runtime import runtime
+    from app.services.agent_runtime import compression, runtime
 
     fake = FakeStream()
     monkeypatch.setattr(runtime, "stream_chat_completion", fake)
+    monkeypatch.setattr(compression, "stream_chat_completion", fake)  # 011：压缩摘要请求同一假流
     return fake
 
 
@@ -262,8 +263,19 @@ def chat_session_factory(db_session: Session, monkeypatch: pytest.MonkeyPatch) -
 @pytest.fixture
 def runtime_db(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> sessionmaker:
     """把 runtime.SessionLocal 指向测试库（Runtime 配置加载/桥接落库用独立会话）。"""
-    from app.services.agent_runtime import runtime
+    from app.services.agent_runtime import compression, runtime
 
     factory = sessionmaker(bind=db_session.get_bind(), autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(runtime, "SessionLocal", factory)
+    monkeypatch.setattr(compression, "SessionLocal", factory)  # 011：压缩状态读写同一测试库
+    return factory
+
+
+@pytest.fixture
+def recorder_db(db_session: Session, monkeypatch: pytest.MonkeyPatch) -> sessionmaker:
+    """把 recorder.SessionLocal 指向测试库（运行记录持久化用独立会话，011）。"""
+    from app.services.agent_runtime import recorder
+
+    factory = sessionmaker(bind=db_session.get_bind(), autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(recorder, "SessionLocal", factory)
     return factory

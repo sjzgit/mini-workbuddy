@@ -35,6 +35,14 @@ from app.schemas.agent_runtime import (
 )
 from app.services import skill_files
 from app.services.agent_runtime import events as rt_events
+from app.services.agent_runtime.context_builder import ContextBuilder
+from app.services.agent_runtime.compression import (
+    SUMMARY_ROLE,
+    _maybe_compact,
+    available_input_tokens,
+    estimate_messages_tokens,
+    load_compaction,
+)
 from app.services.agent_runtime.skills import build_skill_catalog_section
 from app.services.agent_runtime.tools import (
     ToolCatalogEntry,
@@ -97,6 +105,7 @@ class RunContext:
     emitter: "RunEventEmitter"
     # 模型与配置（加载后填充）
     agent_name: str = ""
+    model_name: str = ""  # 011：模型 display_name 快照（runs 表快照来源）
     base_url: str = ""
     model_identifier: str = ""
     api_key: str | None = None
@@ -106,7 +115,8 @@ class RunContext:
     max_rounds: int = 1
     # 运行期状态
     round_no: int = 0
-    messages: list[dict[str, Any]] = field(default_factory=list)
+    builder: "ContextBuilder | None" = None
+    messages: list[dict[str, Any]] = field(default_factory=list)  # 与 builder.messages 同一对象
     reasoning_parts: list[str] = field(default_factory=list)
     content_parts: list[str] = field(default_factory=list)
     usage_total: "UsageInfoModel | None" = None
@@ -125,6 +135,20 @@ class RunContext:
     mcp_stacks: dict = field(default_factory=dict)
     # 资源清理注册
     _closed: bool = False
+    # ---- 011：上下文压缩状态 ----
+    available_input: int = 0
+    compact_enabled: bool = False
+    compact_trigger_ratio: float = 0.8
+    compact_keep_recent_rounds: int = 5
+    compact_summary_target_tokens: int = 1000
+    compact_summary: str = ""
+    compact_prefix_len: int = 0
+    compact_attempts: int = 0
+    compaction_ok: bool = False
+    compact_done_round: int = -1  # 本轮已完成压缩（防同轮重复触发）
+    capacity_error: str | None = None
+    compact_boundary_seq: int = 0
+    effective_history: list | None = None
 
     async def aclose(self) -> None:
         """资源清理（所有退出路径，FR-029）：关闭 MCP 栈。"""
@@ -170,6 +194,8 @@ def _classify_http_error(exc: ChatHttpError) -> tuple[str, str]:
 async def _stream_model_request(
     ctx: "RunContext",
     tools: list[dict[str, Any]] | None,
+    *,
+    purpose: str = "chat",
 ):
     """一次模型请求的流消费（async generator，契约 §2 事件产出）。
 
@@ -177,15 +203,20 @@ async def _stream_model_request(
     model_request_completed；结果状态写入 ctx（stream_error_category /
     stream_error_text / last_request_usage / pending_tool_calls / cancelled）。
     正文与思考增量即时进入 ctx 累积（跨轮保留，FR-013）。
+    011：completed 事件附带 Recorder 透传字段（request_messages / output_full，
+    SSE 前剥离后落 run_payloads）；purpose 标记请求用途（FR-045）。
     """
     round_no = ctx.round_no
     call_id = ctx.emitter.next_call_id("m")
     ctx.pending_tool_calls = []
     ctx.last_request_usage = None
     ctx.stream_cancelled = False
+    messages_snapshot = list(ctx.messages)  # 本次请求实际发送的完整输入
+    round_reasoning: list[str] = []
+    round_content: list[str] = []
     yield ctx.emitter.emit(
         rt_events.EVENT_MODEL_REQUEST_STARTED,
-        ModelRequestStartedData(round=round_no, call_id=call_id),
+        ModelRequestStartedData(round=round_no, call_id=call_id, purpose=purpose),
         round=round_no, call_id=call_id,
     )
     started = time.monotonic()
@@ -211,6 +242,7 @@ async def _stream_model_request(
                 )
             elif isinstance(delta, ReasoningDelta):
                 ctx.reasoning_parts.append(delta.text)
+                round_reasoning.append(delta.text)
                 yield ctx.emitter.emit(
                     rt_events.EVENT_REASONING_DELTA,
                     DeltaData(round=round_no, call_id=call_id, text=delta.text),
@@ -218,6 +250,7 @@ async def _stream_model_request(
                 )
             elif isinstance(delta, ContentDelta):
                 ctx.content_parts.append(delta.text)
+                round_content.append(delta.text)
                 yield ctx.emitter.emit(
                     rt_events.EVENT_CONTENT_DELTA,
                     DeltaData(round=round_no, call_id=call_id, text=delta.text),
@@ -254,11 +287,20 @@ async def _stream_model_request(
         status = "error"
     else:
         status = "ok"
+    output_tool_calls = [
+        {"name": c.get("name", ""), "arguments": c.get("arguments") or "{}"}
+        for c in ctx.pending_tool_calls
+    ] or None
     yield ctx.emitter.emit(
         rt_events.EVENT_MODEL_REQUEST_COMPLETED,
         ModelRequestCompletedData(
             round=round_no, call_id=call_id, status=status,
             duration_ms=duration_ms, usage=ctx.last_request_usage,
+            purpose=purpose,
+            request_messages=messages_snapshot,
+            output_content="".join(round_content) or None,
+            output_reasoning="".join(round_reasoning) or None,
+            output_tool_calls=output_tool_calls,
         ),
         round=round_no, call_id=call_id,
     )
@@ -334,6 +376,7 @@ async def run_agent_loop(ctx: "RunContext"):
         if agent is None or model is None:
             raise AgentUnavailableError("该 Agent 或其绑定的模型已不可用")
         ctx.agent_name = agent.name
+        ctx.model_name = model.display_name
         ctx.base_url = model.base_url
         ctx.model_identifier = model.model_identifier
         ctx.api_key = secret_vault.load_secret(session, model.secret_ref)
@@ -346,6 +389,18 @@ async def run_agent_loop(ctx: "RunContext"):
         ctx.max_rounds = agent.max_rounds
         if request.limits.max_rounds is not None:
             ctx.max_rounds = min(agent.max_rounds, request.limits.max_rounds)
+        # ---- 011：压缩配置与会话压缩状态 ----
+        ctx.available_input = available_input_tokens(
+            int(model.context_length), int(model.max_output_tokens or 0),
+        )
+        ctx.compact_enabled = bool(agent.auto_compact) and request.conversation_id is not None
+        ctx.compact_trigger_ratio = float(agent.compact_trigger_ratio or 0.8)
+        ctx.compact_keep_recent_rounds = int(agent.compact_keep_recent_rounds or 5)
+        ctx.compact_summary_target_tokens = int(agent.compact_summary_target_tokens or 1000)
+        ctx.compact_summary, boundary_seq = "", 0
+        if request.conversation_id is not None:
+            ctx.compact_summary, boundary_seq = load_compaction(session, request.conversation_id)
+        ctx.compact_boundary_seq = boundary_seq
     # ---- ② MCP 连接（每运行独享；失败不阻断，R5）----
     mcp_server_ids = sorted({c.server_id for c in catalog if c.server_id is not None})
     with SessionLocal() as mcp_session:
@@ -374,40 +429,69 @@ async def run_agent_loop(ctx: "RunContext"):
         system_parts.append(agent_system_prompt)
     if skill_catalog_entries:
         system_parts.append(build_skill_catalog_section(skill_catalog_entries))
-    if system_parts:
-        ctx.messages.append({"role": "system", "content": NL2.join(system_parts)})
-    for item in request.history:
-        ctx.messages.append({"role": item.role, "content": item.content})
+    # ---- ④⑤ 统一上下文构造（ContextBuilder：System+Skills+Summary+History+Input+Tools）----
+    boundary = getattr(ctx, "compact_boundary_seq", 0)
+    effective_history = [
+        item for item in request.history
+        if item.seq is None or item.seq > boundary
+    ]
+    ctx.effective_history = effective_history
+    builder = ContextBuilder()
+    builder.set_fixed_prefix(system_parts, ctx.compact_summary, summary_role=SUMMARY_ROLE)
+    builder.set_history([
+        {"role": item.role, "content": item.content} for item in effective_history
+    ])
     if request.user_message and not (
         request.history and request.history[-1].role == "user"
         and request.history[-1].content == request.user_message
     ):
         # 直接调用 Runtime（评测）场景：本次输入不在历史中 → 追加一次（FR-016）
-        ctx.messages.append({"role": "user", "content": request.user_message})
-
-    # ---- ⑤ 工具 payloads（OpenAI function calling 格式）----
-    tools_payload = None
-    if catalog:
-        tools_payload = [
-            {"type": "function", "function": {
-                "name": c.exposed_name,
-                "description": c.description or "",
-                "parameters": c.parameters,
-            }}
-            for c in catalog
-        ]
+        builder.append_current_input(request.user_message)
+    builder.set_tools([
+        {"type": "function", "function": {
+            "name": c.exposed_name,
+            "description": c.description or "",
+            "parameters": c.parameters,
+        }}
+        for c in catalog
+    ] or None)
+    ctx.builder = builder
+    ctx.messages = builder.messages  # 同一 list 引用：运行期演化双向可见
+    tools_payload = builder.tools_payload
 
     yield emitter.emit(
         rt_events.EVENT_RUN_STARTED,
-        RunStartedData(agent_id=request.agent_id, agent_name=ctx.agent_name),
+        RunStartedData(
+            agent_id=request.agent_id,
+            agent_name=ctx.agent_name,
+            model_name=ctx.model_name,
+            model_identifier=ctx.model_identifier,
+        ),
         round=0,
     )
+
+    # ---- 首次发送固定内容预检（FR-039）----
+    if ctx.compact_enabled or ctx.request.conversation_id is not None:
+        async for ev in _maybe_compact(ctx, precheck=True):
+            yield ev
+        if ctx.capacity_error:
+            for ev in _error_out(ctx, "context_overflow", ctx.capacity_error):
+                yield ev
+            return
 
     for round_no in range(1, ctx.max_rounds + 1):
         if cancel.is_set():
             yield _completed(ctx, "cancelled", REASON_CANCELLED, stopped=True)
             return
         ctx.round_no = round_no
+        # ---- 每轮请求前容量检查（FR-038：运行中的工具结果也可能超限）----
+        if ctx.compact_enabled:
+            async for ev in _maybe_compact(ctx, precheck=False):
+                yield ev
+            if ctx.capacity_error:
+                for ev in _error_out(ctx, "context_overflow", ctx.capacity_error):
+                    yield ev
+                return
         async for event in _stream_model_request(ctx, tools_payload):
             yield event
         _merge_usage(ctx)
@@ -429,6 +513,7 @@ async def run_agent_loop(ctx: "RunContext"):
 
         # ---- 工具执行：先 assistant(tool_calls)，后逐个 tool 结果（顺序敏感）----
         tool_calls_payload = []
+        tool_messages = []
         for call in ctx.pending_tool_calls:
             call_name = call.get("name", "")
             call_args = call.get("arguments") or "{}"
@@ -448,11 +533,12 @@ async def run_agent_loop(ctx: "RunContext"):
                     params=_truncate_for_display(record.params_full, settings.runtime_tool_params_max_chars),
                     display_name=record.display_name or record.exposed_name,
                     server_name=record.server_name,
+                    params_full=record.params_full,
                 ),
                 round=round_no,
                 call_id=record.call_id,
             )
-            ctx.messages.append({
+            tool_messages.append({
                 "role": "tool",
                 "tool_call_id": call.get("id") or record.call_id,
                 "content": record.result_for_model,
@@ -462,18 +548,20 @@ async def run_agent_loop(ctx: "RunContext"):
                 ToolCallCompletedData(
                     round=round_no, call_id=record.call_id,
                     tool_name=record.exposed_name, tool_type=record.tool_type,
-                    status=record.status, duration_ms=record.duration_ms,
+                    status=record.status,
+                    duration_ms=record.duration_ms,
                     result_summary=record.summary,
                     result=_truncate_for_display(record.result_full, settings.runtime_tool_result_max_chars),
                     display_name=record.display_name or record.exposed_name,
                     server_name=record.server_name,
+                    result_full=record.result_full,
                 ),
                 round=round_no, call_id=record.call_id,
             )
-        ctx.messages.insert(
-            len(ctx.messages) - len(ctx.pending_tool_calls),
+        ctx.builder.append_tool_exchange(
             {"role": "assistant", "content": "".join(ctx.content_parts) or None,
              "tool_calls": tool_calls_payload},
+            tool_messages,
         )
         if cancel.is_set():
             yield _completed(ctx, "cancelled", REASON_CANCELLED, stopped=True)
@@ -482,6 +570,13 @@ async def run_agent_loop(ctx: "RunContext"):
     # ---- 轮数耗尽仍请求工具 → 收尾请求（不计轮数，无 tools，FR-012）----
     if ctx.pending_tool_calls:
         ctx.round_no = ctx.max_rounds + 1
+        if ctx.compact_enabled:
+            async for ev in _maybe_compact(ctx, precheck=False):
+                yield ev
+            if ctx.capacity_error:
+                for ev in _error_out(ctx, "context_overflow", ctx.capacity_error):
+                    yield ev
+                return
         async for event in _stream_model_request(ctx, None):
             yield event
         _merge_usage(ctx)

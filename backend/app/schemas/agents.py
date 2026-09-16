@@ -20,6 +20,17 @@ THINKING_LEVEL_DEFAULT = "off"
 MAX_ROUNDS_DEFAULT = 10
 MAX_ROUNDS_MIN = 1
 MAX_ROUNDS_MAX = 100
+# ---- 011：上下文压缩配置（contracts/agent-compression-config.md 唯一主定义）----
+AUTO_COMPACT_DEFAULT = True
+COMPACT_TRIGGER_RATIO_DEFAULT = 0.8
+COMPACT_TRIGGER_RATIO_MIN = 0.5
+COMPACT_TRIGGER_RATIO_MAX = 0.95
+COMPACT_KEEP_ROUNDS_DEFAULT = 5
+COMPACT_KEEP_ROUNDS_MIN = 1
+COMPACT_KEEP_ROUNDS_MAX = 50
+COMPACT_SUMMARY_TARGET_DEFAULT = 1000
+COMPACT_SUMMARY_TARGET_MIN = 100
+COMPACT_SUMMARY_TARGET_MAX = 8000
 
 
 class BindingRef(BaseModel):
@@ -79,6 +90,20 @@ class AgentSaveRequest(BaseModel):
     max_rounds: int = Field(default=MAX_ROUNDS_DEFAULT, ge=MAX_ROUNDS_MIN, le=MAX_ROUNDS_MAX)
     enable_deep_thinking: bool = ENABLE_DEEP_THINKING_DEFAULT
     thinking_level: ThinkingLevelLiteral = THINKING_LEVEL_DEFAULT
+    # ---- 011：压缩配置 ----
+    auto_compact: bool = AUTO_COMPACT_DEFAULT
+    compact_trigger_ratio: float = Field(
+        default=COMPACT_TRIGGER_RATIO_DEFAULT,
+        ge=COMPACT_TRIGGER_RATIO_MIN, le=COMPACT_TRIGGER_RATIO_MAX,
+    )
+    compact_keep_recent_rounds: int = Field(
+        default=COMPACT_KEEP_ROUNDS_DEFAULT,
+        ge=COMPACT_KEEP_ROUNDS_MIN, le=COMPACT_KEEP_ROUNDS_MAX,
+    )
+    compact_summary_target_tokens: int = Field(
+        default=COMPACT_SUMMARY_TARGET_DEFAULT,
+        ge=COMPACT_SUMMARY_TARGET_MIN, le=COMPACT_SUMMARY_TARGET_MAX,
+    )
     is_default: bool = False
     bindings: list[BindingRef] | None = None
 
@@ -156,6 +181,10 @@ class AgentDetail(BaseModel):
     max_rounds: int
     enable_deep_thinking: bool
     thinking_level: ThinkingLevelLiteral
+    auto_compact: bool = AUTO_COMPACT_DEFAULT
+    compact_trigger_ratio: float = COMPACT_TRIGGER_RATIO_DEFAULT
+    compact_keep_recent_rounds: int = COMPACT_KEEP_ROUNDS_DEFAULT
+    compact_summary_target_tokens: int = COMPACT_SUMMARY_TARGET_DEFAULT
     is_default: bool
     updated_at: str
 

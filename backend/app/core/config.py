@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # ---- 工具过程展示（specs/010-tool-execution-display/contracts/display-events.md §1.3）----
     runtime_tool_params_max_chars: int = 4000  # 工具事件 params 字段字符上限（超出截断+标记）
     runtime_tool_result_max_chars: int = 16000  # 工具事件 result 字段字符上限（超出截断+标记）
+    # ---- 上下文压缩（specs/011-context-compression-run-records/data-model.md §1）----
+    compact_safety_margin_ratio: float = 0.10  # 安全余量占 context_length 比例
+    compact_default_output_reserve_tokens: int = 4096  # max_output_tokens 非法/缺省时的输出预留
+    compact_request_timeout_seconds: int = 60  # 摘要请求超时
+    compact_max_attempts_per_run: int = 2  # 单次运行压缩尝试上限
+    compact_max_batches: int = 4  # 摘要请求分批上限
 
 
 settings = Settings()

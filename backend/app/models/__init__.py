@@ -207,6 +207,20 @@ class AgentEntry(Base):
     thinking_level: Mapped[str] = mapped_column(
         String(10), nullable=False, default="off", server_default=text("'off'"),
     )  # off | low | medium | high（contracts ThinkingLevel）
+    # ---- 011 增补：上下文压缩配置（specs/011-context-compression-run-records/data-model.md §2）----
+    auto_compact: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("1"),
+    )
+    compact_trigger_ratio: Mapped[Decimal] = mapped_column(
+        Numeric(3, 2), nullable=False, default=Decimal("0.80"),
+        server_default=text("0.80"),
+    )
+    compact_keep_recent_rounds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default=text("5"),
+    )
+    compact_summary_target_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1000, server_default=text("1000"),
+    )
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow,
@@ -330,6 +344,155 @@ class AgentPromptVersion(Base):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+
+
+class ConversationCompactionEntry(Base):
+    """conversation_compactions 表：会话压缩状态（011，FR-033/034）。
+
+    每会话至多一行（unique conversation_id）；summary_text 与 boundary_seq
+    同行同事务更新保证一致（FR-034）；随会话级联删除（011 澄清决定）。
+    """
+
+    __tablename__ = "conversation_compactions"
+
+    __table_args__ = (
+        Index(
+            "uq_compactions_conversation",
+            "conversation_id",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False,
+    )
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    boundary_seq: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+
+class RunEntry(Base):
+    """runs 表：一次 Agent 运行的持久化记录（011，FR-001~003）。
+
+    agent/model 名称是运行时快照（FR-012）；指标由 RunRecorder 依据真实事件
+    增量写入；状态映射见契约 runs-api.md（running/succeeded/partial/failed/cancelled）。
+    conversation_id 允许 NULL（评测直调场景）；聊天链路恒有值并随会话级联删除。
+    """
+
+    __tablename__ = "runs"
+
+    __table_args__ = (
+        Index("uq_runs_run_id", "run_id", unique=True),
+        Index("ix_runs_started_at", "started_at"),
+        Index("ix_runs_status", "status"),
+        Index("ix_runs_conversation_id", "conversation_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=True,
+    )
+    reply_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messages.id", ondelete="SET NULL"), nullable=True,
+    )
+    agent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    agent_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    model_identifier: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    end_reason: Mapped[str] = mapped_column(
+        String(500), nullable=False, default="", server_default=text("''"),
+    )
+    error_category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    total_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_call_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    tool_call_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_output_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+
+class RunEventEntry(Base):
+    """run_events 表：持久化运行事件（011，FR-005/008）。
+
+    仅结构性事件落库（增量事件不落库，011 澄清决定）；data 为剥离透传字段
+    与 010 展示字段后的安全负载；unique(run_id, seq) 保证重复投递幂等（FR-008）。
+    """
+
+    __tablename__ = "run_events"
+
+    __table_args__ = (
+        Index("uq_run_events_run_seq", "run_id", "seq", unique=True),
+        Index("ix_run_events_call_id", "call_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.run_id", ondelete="CASCADE"), nullable=False,
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    call_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+
+
+class RunPayloadEntry(Base):
+    """run_payloads 表：详细载荷受控存储（011，FR-017/021）。
+
+    content 为脱敏后完整内容（大字段完整保存、不截断，011 澄清决定）；
+    读取入口仅 GET /api/runs/{run_id}/payloads/{payload_id}（FR-018/021）。
+    """
+
+    __tablename__ = "run_payloads"
+
+    __table_args__ = (
+        Index(
+            "uq_run_payloads_call_type",
+            "run_id", "call_id", "payload_type",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("runs.run_id", ondelete="CASCADE"), nullable=False,
+    )
+    call_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    char_count: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow,
     )

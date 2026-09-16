@@ -112,4 +112,29 @@ describe('useAgentsStore', () => {
     expect(setDefaultMock).toHaveBeenCalledWith(2)
     expect(listMock).toHaveBeenCalled()
   })
+
+  it('save 提交体携带压缩配置四字段（011）', async () => {
+    updateMock.mockResolvedValue({ id: 1 })
+    listMock.mockResolvedValue([])
+    const store = useAgentsStore()
+    await store.save(
+      {
+        name: 'A', model_id: 1, system_prompt: '',
+        auto_compact: false,
+        compact_trigger_ratio: 0.6,
+        compact_keep_recent_rounds: 3,
+        compact_summary_target_tokens: 500,
+      },
+      1,
+    )
+    expect(updateMock).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        auto_compact: false,
+        compact_trigger_ratio: 0.6,
+        compact_keep_recent_rounds: 3,
+        compact_summary_target_tokens: 500,
+      }),
+    )
+  })
 })

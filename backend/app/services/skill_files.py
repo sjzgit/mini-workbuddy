@@ -13,7 +13,7 @@ from pathlib import Path, PurePosixPath
 
 from app.core.config import settings
 
-SKILL_FILE_NAME = "skill.md"
+SKILL_FILE_NAME = "SKILL.md"
 
 # 目录名合法字符集（契约 skills-api.md §1；data-model.md 校验规则）
 _DIR_NAME_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,99}$")

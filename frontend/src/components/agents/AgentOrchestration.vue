@@ -37,6 +37,11 @@ const emit = defineEmits<{
 const maxRoundsModel = defineModel<number>('maxRounds', { required: true })
 const enableDeepThinkingModel = defineModel<boolean>('enableDeepThinking', { required: true })
 const thinkingLevelModel = defineModel<ThinkingLevel>('thinkingLevel', { required: true })
+// 011：上下文压缩配置
+const autoCompactModel = defineModel<boolean>('autoCompact', { required: true })
+const compactTriggerRatioModel = defineModel<number>('compactTriggerRatio', { required: true })
+const compactKeepRoundsModel = defineModel<number>('compactKeepRounds', { required: true })
+const compactSummaryTargetModel = defineModel<number>('compactSummaryTarget', { required: true })
 
 const router = useRouter()
 
@@ -130,6 +135,43 @@ function toggleResource(type: 'tool' | 'skill' | 'mcp', id: number, checked: boo
     </section>
 
     <section class="orch-section">
+      <h4 class="orch-title">上下文压缩</h4>
+      <div class="compact-row">
+        <span class="thinking-switch-label">
+          <Switch v-model:checked="autoCompactModel" size="small" />
+          自动压缩
+        </span>
+      </div>
+      <p class="orch-hint">会话接近模型上下文容量时，自动把较早对话整理为摘要。</p>
+      <template v-if="autoCompactModel">
+        <div class="compact-field">
+          <span class="compact-label">触发比例</span>
+          <InputNumber
+            v-model:value="compactTriggerRatioModel"
+            :min="0.5" :max="0.95" :step="0.05" size="small"
+          />
+        </div>
+        <p class="orch-hint">估算输入达到可用容量的该比例时触发压缩。</p>
+        <div class="compact-field">
+          <span class="compact-label">保留最近对话轮数</span>
+          <InputNumber
+            v-model:value="compactKeepRoundsModel"
+            :min="1" :max="50" :precision="0" size="small"
+          />
+        </div>
+        <p class="orch-hint">压缩时完整保留最近 N 轮对话（含工具交互）。</p>
+        <div class="compact-field">
+          <span class="compact-label">摘要目标长度</span>
+          <InputNumber
+            v-model:value="compactSummaryTargetModel"
+            :min="100" :max="8000" :precision="0" size="small"
+          />
+        </div>
+        <p class="orch-hint">生成摘要的目标长度（估算值，不保证精确等长）；小窗口模型下会自动受限。</p>
+      </template>
+    </section>
+
+    <section class="orch-section">
       <h4 class="orch-title">工具</h4>
       <div class="picker-row">
         <span class="picker-summary">
@@ -198,6 +240,23 @@ function toggleResource(type: 'tool' | 'skill' | 'mcp', id: number, checked: boo
 </template>
 
 <style scoped lang="scss">
+.compact-row { display: flex; align-items: center; }
+
+.compact-field { display: flex; align-items: center; gap: 10px; }
+
+.compact-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-width: 9em;
+}
+
+.orch-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
 .orchestration {
   display: flex;
   flex-direction: column;
