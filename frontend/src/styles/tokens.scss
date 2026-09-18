@@ -2,6 +2,9 @@
 // mini-workbuddy 设计令牌（唯一主定义）
 // 所有页面与组件 MUST 引用本文件的 CSS 变量，禁止散写相近色。
 // 使用规范见根目录 AGENTS.md §8。
+//
+// 主题机制：默认（:root）为亮色系；html[data-theme='dark'] 覆盖为暗色系。
+// 切换入口：侧栏左下角主题按钮（状态持久化在 localStorage）。
 // =============================================================
 
 :root {
@@ -43,4 +46,35 @@
     BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'Fira Code Variable', 'Fira Code', 'SF Mono', Monaco, Menlo,
     Consolas, monospace;
+}
+
+// ---- 暗色系（暖色暗底，主色提亮以保对比度）----
+// 约束：不用大面积纯黑、不用蓝紫/霓虹；层级语义与亮色一一对应。
+[data-theme='dark'] {
+  --bg-deep: #14100d; // 浏览器最外层背景
+  --bg-base: #1a1512; // 页面主内容背景
+  --bg-surface: #241d18; // 卡片、弹窗、输入区域
+  --bg-elevated: #2a221c; // 浮层背景
+  --bg-hover: #2f2721; // 鼠标经过的列表项
+  --bg-active: #382e26; // 当前选中的菜单项
+
+  --border: #38302a;
+  --border-hover: #463b33;
+  --border-strong: #544738;
+
+  --accent: #d4854d; // 暗底上提亮的主色
+  --accent-hover: #e2935c;
+  --accent-dim: rgba(212, 133, 77, 0.14);
+
+  --text-primary: #f0e9e1;
+  --text-secondary: #b5a695;
+  --text-tertiary: #877864;
+  --text-inverse: #ffffff;
+
+  --success: #3aa981;
+  --warning: #d4a017;
+  --danger: #e05a4e;
+
+  // 暗色下滚动条与阴影也随令牌自动适配（引用方均使用变量）
+  color-scheme: dark;
 }

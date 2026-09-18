@@ -431,7 +431,7 @@ onMounted(() => {
 
   &--primary {
     background: var(--accent);
-    color: #fff;
+    color: var(--text-inverse);
   }
 }
 </style>

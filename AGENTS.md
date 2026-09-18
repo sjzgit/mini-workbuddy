@@ -152,6 +152,14 @@ npm run test:unit          # Vitest 单元测试（单次运行）
 - 禁止：蓝紫渐变、霓虹光效、大面积纯黑背景、高饱和荧光色；阴影仅用于弹窗与浮层；卡片以白底 + 浅边框区分
 - 布局：整页占满高度无横向滚动；桌面侧栏固定 188px；<900px 收起为抽屉
 
+**主题（亮/暗双色系）**：
+
+- 亮色系为默认（`tokens.scss` 的 `:root`）；暗色系以 `html[data-theme='dark']` 在同一文件内覆盖同名变量（暖色暗底，主色提亮为 `#d4854d`），**不新增第二套变量名**
+- 切换入口：侧栏左下角主题按钮；状态在 `stores/ui.ts`（`theme` / `isDark` / `toggleTheme`），持久化于 `localStorage`（key：`mini-workbuddy:theme`），并同步 `html[data-theme]`
+- antd 组件经 `App.vue` 的 ConfigProvider 联动：暗色用 `darkAlgorithm` + `colorBgBase: #241d18`（= 暗色 `--bg-surface`），主色同步用暗色 accent 值
+- `index.html` 头部有一段内联脚本在首屏前应用持久化主题（防暗色用户看到亮色闪烁）；改动存储 key 时 MUST 同步该脚本与 `stores/ui.ts`
+- 新页面/组件照常只引用变量即可自动适配两套主题；**禁止**为暗色模式在页面内单独写色值
+
 ## 9. 每次修改后的检查清单（交付前必须全绿）
 
 ```bash
@@ -184,6 +192,7 @@ npm run test:unit      # 全部通过
 - 公共异常语义统一（如健康检查的 503 结构），错误信息不泄露内部细节
 - 测试先行：契约测试以 feature spec 的 `contracts/` 为准；夹具在 `tests/conftest.py`
 - 类型注解完整（pyright basic 通过）
+- **凡需启动后台 asyncio 任务（`asyncio.create_task` / `get_running_loop`）的接口 MUST 声明为 `async def`**：同步 `def` 路由运行在 AnyIO 工作线程池，线程内没有事件循环，`create_task` 无法调度（后台任务静默不启动）。先例：聊天发送与评测发起（012 修复记录）
 
 ### 通用
 

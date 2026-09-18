@@ -12,9 +12,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.api import agents, chat, health, mcp, models, runs, skills, tools
+from app.api import evaluation as evaluation_api
 from app.core.config import settings
 from app.core.db import SessionLocal
-from app.services.run_service import mark_interrupted_runs
+from app.services import run_service
+from app.services.evaluation import run_service as evaluation_run_service
 
 # 日志配置：uvicorn 只接管自己的 logger，root 无 handler 且默认 WARNING，
 # 业务日志（含 LLM API 调用日志，FR-011）必须显式放开到 INFO。
@@ -24,12 +26,14 @@ logging.getLogger("app").setLevel(logging.INFO)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """启动恢复（011 FR-007）：遗留 running 运行标记"运行中断"。"""
+    """启动恢复（011 FR-007 / 012 FR-026）：遗留运行标记中断。"""
     with SessionLocal() as session:
-        count = mark_interrupted_runs(session)
-    if count:
+        count = run_service.mark_interrupted_runs(session)
+        eval_count = evaluation_run_service.mark_interrupted_runs(session)
+    if count or eval_count:
         logging.getLogger("app").info(
-            "启动恢复：已将 %s 条遗留运行记录标记为运行中断", count,
+            "启动恢复：已将 %s 条遗留运行记录、%s 条评测运行标记为中断",
+            count, eval_count,
         )
     yield
 
@@ -44,6 +48,7 @@ app.include_router(agents.router)
 app.include_router(chat.router)
 app.include_router(runs.router)
 app.include_router(runs.conversations_router)
+app.include_router(evaluation_api.router)
 
 
 @app.exception_handler(RequestValidationError)

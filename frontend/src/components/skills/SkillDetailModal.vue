@@ -514,7 +514,7 @@ const treeSelectHandler: TreeProps['onSelect'] = (keys) => {
 
   &--primary {
     background: var(--accent);
-    color: #fff;
+    color: var(--text-inverse);
 
     &:disabled {
       opacity: 0.6;

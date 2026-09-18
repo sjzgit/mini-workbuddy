@@ -5,6 +5,14 @@
     <link rel="icon" href="/favicon.ico">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>mini-workbuddy</title>
+    <script>
+      // 首屏前应用持久化主题，避免暗色用户看到亮色闪烁（与 stores/ui.ts 的 key 一致）
+      try {
+        if (localStorage.getItem('mini-workbuddy:theme') === 'dark') {
+          document.documentElement.dataset.theme = 'dark'
+        }
+      } catch (e) { /* ignore */ }
+    </script>
   </head>
   <body>
     <div id="app"></div>

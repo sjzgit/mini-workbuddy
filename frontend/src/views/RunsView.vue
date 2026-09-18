@@ -85,6 +85,12 @@ onMounted(() => {
     conversationFilter.value != null ? { conversation_id: conversationFilter.value } : {},
   )
   void agentsStore.fetchAgents()
+  // 评测 Case 明细下钻入口（specs/012 FR-030）：/runs?run_id=xxx 直开详情抽屉
+  const runIdRaw = route.query.run_id
+  if (typeof runIdRaw === 'string' && runIdRaw) {
+    detailRunId.value = runIdRaw
+    drawerOpen.value = true
+  }
 })
 </script>
 

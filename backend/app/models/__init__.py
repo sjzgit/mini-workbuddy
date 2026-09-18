@@ -496,3 +496,202 @@ class RunPayloadEntry(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow,
     )
+
+
+# ---- 012：Agent 评测系统（specs/012-agent-evaluation/data-model.md §2）----
+
+
+class EvaluationDatasetEntry(Base):
+    """evaluation_datasets 表：评测数据集（012）。
+
+    数据模型主定义：specs/012-agent-evaluation/data-model.md §2.1
+    """
+
+    __tablename__ = "evaluation_datasets"
+
+    __table_args__ = (
+        Index("ix_evaluation_datasets_updated_at", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(
+        String(500), nullable=False, default="", server_default=text("''"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+
+class EvaluationCaseEntry(Base):
+    """evaluation_cases 表：评测用例（012）。
+
+    数据模型主定义：specs/012-agent-evaluation/data-model.md §2.2
+    expected_answer / scoring_criteria 允许为空（spec FR-002）；
+    随数据集级联删除；历史评测运行读任务快照，不受删除影响（FR-007）。
+    """
+
+    __tablename__ = "evaluation_cases"
+
+    __table_args__ = (
+        Index("ix_evaluation_cases_dataset", "dataset_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_datasets.id", ondelete="CASCADE"), nullable=False,
+    )
+    user_question: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scoring_criteria: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+
+class EvaluationTaskEntry(Base):
+    """evaluation_tasks 表：评测任务（评测定义，012）。
+
+    数据模型主定义：specs/012-agent-evaluation/data-model.md §2.3
+    agent_id / dataset_id 为业务引用（不建 DB 外键，项目先例）；
+    三快照创建时一次性固化，之后任何路径不 UPDATE（Invariant 5/6/7）。
+    """
+
+    __tablename__ = "evaluation_tasks"
+
+    __table_args__ = (
+        Index("ix_evaluation_tasks_dataset", "dataset_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    agent_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    dataset_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    evaluator_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    evaluator_config: Mapped[dict] = mapped_column(JSON, nullable=False)
+    pass_threshold: Mapped[int] = mapped_column(Integer, nullable=False)
+    agent_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    dataset_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    evaluator_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default=text("'pending'"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+
+class EvaluationRunEntry(Base):
+    """evaluation_runs 表：评测运行（一次实际执行，012）。
+
+    数据模型主定义：specs/012-agent-evaluation/data-model.md §2.4
+    run_id 是评测运行业务标识（uuid4 hex，区别于 AgentRun 的 runs.run_id）；
+    average_score / pass_rate 仅基于有效评分，全失败为 NULL 不为 0（FR-020）。
+    """
+
+    __tablename__ = "evaluation_runs"
+
+    __table_args__ = (
+        Index("uq_evaluation_runs_run_id", "run_id", unique=True),
+        Index("ix_evaluation_runs_task", "task_id"),
+        Index("ix_evaluation_runs_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_tasks.id", ondelete="CASCADE"), nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default=text("'pending'"),
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    interrupted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    interrupted_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    total_cases: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    completed_cases: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    passed_cases: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    failed_cases: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    execution_failed_cases: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    judge_failed_cases: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    cancelled_cases: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0"),
+    )
+    average_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pass_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=_utcnow, onupdate=_utcnow,
+    )
+
+
+class EvaluationCaseRunEntry(Base):
+    """evaluation_case_runs 表：用例运行（012）。
+
+    数据模型主定义：specs/012-agent-evaluation/data-model.md §2.5
+    agent_run_id 为业务引用指向 runs.run_id（Invariant 4 下钻链路）；
+    score 仅在 PASSED/FAILED 有值；执行失败/评分失败不判 0 分（FR-019）；
+    重试新建行不覆盖历史（Invariant 12），attempt 从 1 递增。
+    """
+
+    __tablename__ = "evaluation_case_runs"
+
+    __table_args__ = (
+        Index("ix_evaluation_case_runs_run", "evaluation_run_id"),
+        Index("ix_evaluation_case_runs_case", "dataset_case_id"),
+        Index("ix_evaluation_case_runs_agent_run", "agent_run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    evaluation_run_id: Mapped[int] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="CASCADE"), nullable=False,
+    )
+    dataset_case_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default=text("'pending'"),
+    )
+    agent_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evaluator_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    evaluator_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tool_call_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    model_call_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    iteration_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    attempt: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1"),
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
