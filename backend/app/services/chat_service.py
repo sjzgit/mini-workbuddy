@@ -114,6 +114,7 @@ def _to_summary(entry: ConversationEntry) -> ConversationSummary:
         agent_id=entry.agent_id,
         updated_at=entry.updated_at.isoformat(),
         created_at=entry.created_at.isoformat(),
+        workspace_path=getattr(entry, "workspace_path", None),  # 014：会话工作空间
     )
 
 
@@ -353,6 +354,8 @@ async def _run_generation(
                 runtime_event_names.EVENT_COMPRESSION_COMPLETED,
                 runtime_event_names.EVENT_COMPRESSION_FAILED,
                 runtime_event_names.EVENT_COMPRESSION_FALLBACK,
+                runtime_event_names.EVENT_ASK_USER,
+                runtime_event_names.EVENT_PERMISSION_CHECKED,
             ):
                 # 工具/压缩事件按契约原样转发（剥离 Recorder 透传字段后）
                 payload = {

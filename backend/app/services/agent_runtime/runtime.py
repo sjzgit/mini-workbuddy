@@ -21,8 +21,9 @@ from sqlalchemy.orm import Session
 
 from app.core import secret_vault
 from app.core.db import SessionLocal
-from app.models import AgentEntry, ModelEntry
+from app.models import AgentEntry, ConversationEntry, ModelEntry
 from app.schemas.agent_runtime import (
+    AskUserData,
     DeltaData,
     ErrorEventData,
     ModelRequestCompletedData,
@@ -47,8 +48,10 @@ from app.services.agent_runtime.skills import build_skill_catalog_section
 from app.services.agent_runtime.tools import (
     ToolCatalogEntry,
     ToolContext,
+    await_ask_user,
     build_tool_catalog,
     connect_mcp_servers,
+    finish_ask_user_record,
     run_tool,
 )
 import app.services.openai_client as openai
@@ -138,6 +141,8 @@ class RunContext:
     # ---- 011：上下文压缩状态 ----
     available_input: int = 0
     compact_enabled: bool = False
+    # ---- 014 增补：会话工作空间快照（启动时读取，运行期不可变，Invariant 6）----
+    workspace_path: str | None = None
     compact_trigger_ratio: float = 0.8
     compact_keep_recent_rounds: int = 5
     compact_summary_target_tokens: int = 1000
@@ -401,6 +406,12 @@ async def run_agent_loop(ctx: "RunContext"):
         if request.conversation_id is not None:
             ctx.compact_summary, boundary_seq = load_compaction(session, request.conversation_id)
         ctx.compact_boundary_seq = boundary_seq
+        # ---- 014：会话工作空间快照（启动时读取，运行期不可变，Invariant 6）----
+        ctx.workspace_path = None
+        if request.conversation_id is not None:
+            conversation = session.get(ConversationEntry, request.conversation_id)
+            if conversation is not None:
+                ctx.workspace_path = conversation.workspace_path
     # ---- ② MCP 连接（每运行独享；失败不阻断，R5）----
     mcp_server_ids = sorted({c.server_id for c in catalog if c.server_id is not None})
     with SessionLocal() as mcp_session:
@@ -411,6 +422,12 @@ async def run_agent_loop(ctx: "RunContext"):
         catalog={c.exposed_name: c for c in catalog},
         skill_catalog_ids=skill_ids,
         mcp_sessions=sessions_map, mcp_stacks=stacks,
+    )
+    # ---- 014：构造运行权限上下文（启动快照 + 冻结保护集；ToolContext 持有）----
+    from app.services.agent_runtime.permission import build_context
+
+    ctx.tool_ctx.permission = build_context(
+        settings.authorized_dir, ctx.workspace_path,
     )
 
     # ---- ③ Skill 目录 XML（澄清指定格式，FR-014）----
@@ -466,6 +483,7 @@ async def run_agent_loop(ctx: "RunContext"):
             agent_name=ctx.agent_name,
             model_name=ctx.model_name,
             model_identifier=ctx.model_identifier,
+            workspace_path=ctx.workspace_path,
         ),
         round=0,
     )
@@ -538,6 +556,33 @@ async def run_agent_loop(ctx: "RunContext"):
                 round=round_no,
                 call_id=record.call_id,
             )
+            # 014：权限判定审计事件（run_tool 权限阶段产出；US5）
+            if record.pending_events:
+                for permission_event in record.pending_events:
+                    yield permission_event
+                record.pending_events = []
+            # ---- 013：ask_user 挂起——发事件、等回答/取消/超时、补全记录（research R1）----
+            if record.ask is not None:
+                ask = record.ask
+                yield ctx.emitter.emit(
+                    rt_events.EVENT_ASK_USER,
+                    AskUserData(
+                        round=round_no, call_id=record.call_id,
+                        question=ask.question, options=ask.options,
+                        multi_select=ask.multi_select,
+                    ),
+                    round=round_no,
+                    call_id=record.call_id,
+                )
+                outcome = await await_ask_user(ask, record.call_id, ctx.tool_ctx)
+                # 014：ask 分支统一经 resume_pending_tool 收尾——013 ask_user
+                # 原样交还答案；权限确认（record.permission 非空）→ grant/拒绝
+                from app.services.agent_runtime.tools import resume_pending_tool
+
+                with SessionLocal() as tool_session:
+                    record = await resume_pending_tool(
+                        record, outcome, ctx.tool_ctx, tool_session,
+                    )
             tool_messages.append({
                 "role": "tool",
                 "tool_call_id": call.get("id") or record.call_id,

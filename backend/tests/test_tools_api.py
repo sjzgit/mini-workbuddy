@@ -29,7 +29,7 @@ def test_list_returns_three_builtin_tools(
     assert time_item["updated_at"]  # ISO 时间存在
 
     shell_item = by_name["shell"]
-    assert shell_item["params_summary"] == "command（必填）"
+    assert shell_item["params_summary"] == "command（必填）、cwd（可选）"  # 014：cwd 参数
     file_item = by_name["file_read_write"]
     assert "action（必填）" in file_item["params_summary"]
 

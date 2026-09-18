@@ -24,6 +24,8 @@ class RunSummary(BaseModel):
     agent_name: str
     model_name: str
     status: RunStatusLiteral
+    # ---- 014 增补：运行启动时快照的会话工作空间（None = 未选择，data-model §1.2）----
+    workspace_path: str | None = None
     end_reason: str = ""
     error_summary: str | None = None
     started_at: str

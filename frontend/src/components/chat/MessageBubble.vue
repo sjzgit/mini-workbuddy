@@ -197,12 +197,6 @@ async function copyContent(): Promise<void> {
   margin-top: 6px;
   display: flex;
   gap: 12px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.msg-row:hover .msg-actions {
-  opacity: 1;
 }
 
 .msg-action {

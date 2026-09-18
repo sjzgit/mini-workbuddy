@@ -199,3 +199,6 @@ npm run test:unit      # 全部通过
 - 遵循 spec-kit 流程：spec → plan → tasks → implement；实现与规范不一致时先改规范（SSOT）再改代码
 - `0user chat/` 目录禁止读写
 - 提交粒度：每个任务或逻辑分组一次提交（仓库启用 git 后）
+- **代码安全协议（防丢代码，Agent 红线）**：
+  - **每特性一分支**：`/speckit-implement` 开始时从 main 建 `NNN-<feature-name>` 分支（与 specs 目录同名），每 Phase 绿即 commit，门禁全绿后合回 main
+  - **还原前必须备份**：文件损坏需还原时禁止直接 `git checkout -- <file>`（会把文件退回最近 commit，未提交改动永久丢失）；局部损坏用 Edit 精确修复；整文件级损坏先 `cp <file> <file>.bak-broken` 再还原，重写确认后删 .bak；担心丢其他文件进度用 `git stash push`（可找回）

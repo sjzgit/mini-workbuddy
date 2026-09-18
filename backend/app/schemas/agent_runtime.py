@@ -24,6 +24,11 @@ EVENT_COMPRESSION_STARTED = "compression_started"
 EVENT_COMPRESSION_COMPLETED = "compression_completed"
 EVENT_COMPRESSION_FAILED = "compression_failed"
 EVENT_COMPRESSION_FALLBACK = "compression_fallback"
+# ---- 013 增补：Ask User 询问事件（specs/013-ask-user-tool/contracts/ask-user-api.md §2）----
+EVENT_ASK_USER = "ask_user"
+
+# ---- 014 增补：权限判定事件（specs/014-workspace-permission/contracts/workspace-permission-api.md §2.1）----
+EVENT_PERMISSION_CHECKED = "permission_checked"
 
 # ---- 复合字面量 ----
 
@@ -69,6 +74,8 @@ class RunStartedData(BaseModel):
     # ---- 011 增补：模型名称快照（runs 表快照字段来源）----
     model_name: str = ""
     model_identifier: str = ""
+    # ---- 014 增补：会话工作空间快照（runs.workspace_path 快照来源，data-model §5.2）----
+    workspace_path: str | None = None
 
 
 class ModelRequestStartedData(BaseModel):
@@ -207,3 +214,30 @@ class CompressionFallbackData(BaseModel):
     dropped_groups: int
     kept_groups: int
     estimated_tokens_after: int
+
+
+# ---- 013 增补：Ask User 事件负载（contracts/ask-user-api.md §2）----
+
+
+class AskUserData(BaseModel):
+    """event: ask_user：模型向用户发起询问，等待回答期间运行暂停推进。"""
+
+    round: int
+    call_id: str  # 工具调用标识；回答端点按此定位挂起的等待
+    question: str
+    options: list[str] = []  # 空 = 开放式（输入框）
+    multi_select: bool = False  # 仅选项式有意义；缺省单选
+
+
+# ---- 014 增补：权限判定事件负载（contracts/workspace-permission-api.md §2.1）----
+
+
+class PermissionCheckedData(BaseModel):
+    """event: permission_checked：file_read_write / shell 每次权限判定一条（含 allow，审计）。"""
+
+    round: int
+    call_id: str
+    decision: Literal["allow", "ask_user", "deny"]  # 三值决策（Invariant 4，禁止布尔）
+    tool_name: str
+    path: str  # 规范化后的目标路径（不含文件内容，FR-033）
+    reason: str  # 人话原因

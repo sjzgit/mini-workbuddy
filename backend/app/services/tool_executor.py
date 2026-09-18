@@ -46,10 +46,17 @@ class ToolRunOutcome:
     message: str | None = None  # None → 按成功/失败给默认文案
 
 
-def execute(name: str, params: dict[str, Any], session: Session) -> ToolExecutionResult:
-    """统一执行入口：永不向上抛异常，失败也是结构化返回（FR-011/012）。"""
+def execute(
+    name: str, params: dict[str, Any], session: Session,
+    *, shell_cwd: str | None = None,
+) -> ToolExecutionResult:
+    """统一执行入口：永不向上抛异常，失败也是结构化返回（FR-011/012）。
+
+    shell_cwd（014）：shell 工具执行基准目录（运行时权限通过后由 Runtime 传入；
+    直调场景缺省 None = 继承后端进程 cwd，与 003 既有行为一致）。
+    """
     try:
-        return _execute_checked(name, params, session)
+        return _execute_checked(name, params, session, shell_cwd=shell_cwd)
     except ToolExecutionError as exc:
         return ToolExecutionResult(
             success=False,
@@ -67,6 +74,7 @@ def execute(name: str, params: dict[str, Any], session: Session) -> ToolExecutio
 
 def _execute_checked(
     name: str, params: dict[str, Any], session: Session,
+    *, shell_cwd: str | None = None,
 ) -> ToolExecutionResult:
     # ① 存在性：注册表
     definition = tool_registry.get_definition(name)
@@ -89,8 +97,8 @@ def _execute_checked(
     except ValidationError as exc:
         return _failure("invalid_params", _format_validation_error(exc))
 
-    # ④ 分发
-    outcome = _dispatch(name, validated)
+    # ④ 分发（shell 透传执行基准目录；014）
+    outcome = _dispatch(name, validated, shell_cwd=shell_cwd)
     return ToolExecutionResult(
         success=outcome.success,
         output=outcome.output,
@@ -100,17 +108,25 @@ def _execute_checked(
     )
 
 
-def _dispatch(name: str, validated: BaseModel) -> ToolRunOutcome:
+def _dispatch(name: str, validated: BaseModel, *, shell_cwd: str | None = None) -> ToolRunOutcome:
     """分发到工具实现（延迟导入：工具模块反向依赖本模块的异常/结果类型）。
 
+    ask_user 是运行内挂起语义（specs/013-ask-user-tool research R1/R6）：
+    只能在 Agent 运行中由模型经 Runtime 调用，同步统一入口显式人话拒绝。
     每个 handler 只接受本工具的参数模型实例（注册表 params_model 派生），
     与 name 的对应关系由下方映射表保证，故参数类型用 ellipsis。
     """
     from app.services import file_tool, shell_tool, time_tool
 
+    if name == "ask_user":
+        raise ToolExecutionError(
+            code="execution_error",
+            message="ask_user 仅能在 Agent 运行中由模型调用，不支持直接执行",
+        )
+
     handlers: dict[str, Callable[..., ToolRunOutcome]] = {
         tool_registry.CURRENT_TIME: time_tool.run,
-        tool_registry.SHELL: shell_tool.run,
+        tool_registry.SHELL: lambda p: shell_tool.run(p, cwd=shell_cwd),
         tool_registry.FILE_READ_WRITE: file_tool.run,
     }
     handler = handlers.get(name)

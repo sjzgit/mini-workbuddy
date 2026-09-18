@@ -16,6 +16,8 @@ from sqlalchemy.exc import IntegrityError
 from app.core.db import SessionLocal
 from app.models import AgentEntry, ModelEntry, RunEntry, RunEventEntry, RunPayloadEntry
 from app.schemas.agent_runtime import (
+    EVENT_ASK_USER,
+    EVENT_PERMISSION_CHECKED,
     EVENT_COMPRESSION_COMPLETED,
     EVENT_COMPRESSION_FAILED,
     EVENT_COMPRESSION_FALLBACK,
@@ -122,6 +124,7 @@ class RunRecorder:
                 agent_name=str(event.data.get("agent_name", "")),
                 model_name=str(event.data.get("model_name", "")),
                 model_identifier=str(event.data.get("model_identifier", "")),
+                workspace_path=event.data.get("workspace_path"),
             )
             self._insert_event(event)
             return
@@ -170,6 +173,16 @@ class RunRecorder:
                 self._save_payload(str(event.data["call_id"]), "tool_result", result_full)
             self._insert_event(event)
             return
+        if name == EVENT_ASK_USER:
+            # 013：询问事件作为结构性事件落 run_events（FR-016 可回看）；
+            # 回答内容经对应 tool_call_completed 的 tool_result payload 完整保存
+            self._insert_event(event)
+            return
+        if name == EVENT_PERMISSION_CHECKED:
+            # 014：权限判定事件落 run_events（US5 审计：工具/路径/决策/原因，
+            # 负载天然无文件内容——FR-033）
+            self._insert_event(event)
+            return
         if name in (EVENT_COMPRESSION_STARTED, EVENT_COMPRESSION_COMPLETED,
                     EVENT_COMPRESSION_FAILED, "compression_fallback"):
             if name == EVENT_COMPRESSION_STARTED:
@@ -207,6 +220,7 @@ class RunRecorder:
         agent_name: str = "",
         model_name: str = "",
         model_identifier: str = "",
+        workspace_path: str | None = None,
     ) -> None:
         """首事件时创建 runs 行（status=running，快照字段）。"""
         if self._row_created:
@@ -228,6 +242,7 @@ class RunRecorder:
                 agent_name=agent_name,
                 model_name=model_name,
                 model_identifier=model_identifier,
+                workspace_path=workspace_path,  # 014：运行启动时快照（Invariant 6）
                 status="running",
             ))
             session.commit()

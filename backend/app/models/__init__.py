@@ -249,6 +249,11 @@ class ConversationEntry(Base):
         String(100), nullable=False, default="新会话", server_default=text("'新会话'"),
     )
     agent_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    # ---- 014 增补：Session Workspace（specs/014-workspace-permission/data-model.md §1.1）----
+    # 三列全 NULL = 未选择工作空间（授权范围仅系统目录）；清除 = 三列置 NULL（单事务）
+    workspace_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    workspace_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    workspace_selected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=_utcnow,
     )
@@ -411,6 +416,8 @@ class RunEntry(Base):
     agent_name: Mapped[str] = mapped_column(String(100), nullable=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
     model_identifier: Mapped[str] = mapped_column(String(200), nullable=False)
+    # ---- 014 增补：运行启动时快照的会话工作空间（data-model.md §1.2）；运行期不可变 ----
+    workspace_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     end_reason: Mapped[str] = mapped_column(
         String(500), nullable=False, default="", server_default=text("''"),

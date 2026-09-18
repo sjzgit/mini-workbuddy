@@ -16,6 +16,10 @@ const { chatApiMock, openStreamMock } = vi.hoisted(() => ({
     send: vi.fn(),
     regenerate: vi.fn(),
     stop: vi.fn(),
+    answerAsk: vi.fn(),
+    getWorkspace: vi.fn(),
+    setWorkspace: vi.fn(),
+    clearWorkspace: vi.fn(),
   },
   openStreamMock: vi.fn(),
 }))
@@ -134,7 +138,7 @@ describe('chat store', () => {
   it('switchAgent 调 PUT 并更新会话排序位', async () => {
     const chat = useChatStore()
     chat.currentId = 1
-    chat.conversations = [{ id: 1, title: 'a', agent_id: 1, updated_at: 't', created_at: 't' }]
+    chat.conversations = [{ id: 1, title: 'a', agent_id: 1, updated_at: 't', created_at: 't', workspace_path: null }]
     chatApiMock.switchAgent.mockResolvedValue({
       id: 1,
       title: 'a',
@@ -164,7 +168,8 @@ describe('chat store', () => {
     const chat = useChatStore()
     chat.currentId = 1
     chat.runStates[1] = {
-      phase: 'generating', generatingReplyId: 11, segments: [], error: null, finishedReplyId: null,
+      phase: 'generating', generatingReplyId: 11, segments: [], error: null,
+      finishedReplyId: null, pendingAsk: null,
     }
     chatApiMock.stop.mockResolvedValue({ stopped: true })
     await chat.stopGeneration()
@@ -223,7 +228,7 @@ describe('chat store', () => {
     const chat = useChatStore()
     chat.pendingAgentId = 5
     expect(chat.effectiveAgentId).toBe(5)
-    chat.conversations = [{ id: 1, title: 'a', agent_id: 3, updated_at: 't', created_at: 't' }]
+    chat.conversations = [{ id: 1, title: 'a', agent_id: 3, updated_at: 't', created_at: 't', workspace_path: null }]
     chat.currentId = 1
     expect(chat.effectiveAgentId).toBe(3)
   })
@@ -510,5 +515,64 @@ describe('chat store 历史运行回放（011 优化①）', () => {
     const store = useChatStore()
     await store.selectConversation(7)
     expect(store.historyReplays[43]).toBeUndefined()
+  })
+})
+
+describe('chat store 工作空间（014）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  function seedConversation(workspacePath: string | null): void {
+    const store = useChatStore()
+    store.upsertConversation({
+      id: 1,
+      title: 'WS',
+      agent_id: 1,
+      updated_at: 't',
+      created_at: 't',
+      workspace_path: workspacePath,
+    })
+    store.currentId = 1
+  }
+
+  it('setWorkspace 成功：摘要 workspace_path 更新为后端返回值', async () => {
+    seedConversation(null)
+    chatApiMock.setWorkspace.mockResolvedValue({
+      workspace_path: 'D:/ws/demo', workspace_source: 'user_selected', workspace_selected_at: 't',
+    })
+    const store = useChatStore()
+    await store.setWorkspace('D:\ws\demo')
+    expect(chatApiMock.setWorkspace).toHaveBeenCalledWith(1, 'D:\ws\demo')
+    expect(store.currentWorkspace).toBe('D:/ws/demo')
+  })
+
+  it('setWorkspace 失败：抛错且保留原值（前端不预改状态）', async () => {
+    seedConversation('D:/ws/keep')
+    chatApiMock.setWorkspace.mockRejectedValue(new Error('工作空间路径不存在'))
+    const store = useChatStore()
+    await expect(store.setWorkspace('D:\bad')).rejects.toThrow('工作空间路径不存在')
+    expect(store.currentWorkspace).toBe('D:/ws/keep')
+  })
+
+  it('clearWorkspace 成功：回到未选择', async () => {
+    seedConversation('D:/ws/demo')
+    chatApiMock.clearWorkspace.mockResolvedValue({
+      workspace_path: null, workspace_source: null, workspace_selected_at: null,
+    })
+    const store = useChatStore()
+    await store.clearWorkspace()
+    expect(chatApiMock.clearWorkspace).toHaveBeenCalledWith(1)
+    expect(store.currentWorkspace).toBeNull()
+  })
+
+  it('无会话时 setWorkspace/clearWorkspace 抛错不请求', async () => {
+    const store = useChatStore()
+    store.currentId = null
+    await expect(store.setWorkspace('D:/x')).rejects.toThrow('请先创建或选择会话')
+    await expect(store.clearWorkspace()).rejects.toThrow('请先创建或选择会话')
+    expect(chatApiMock.setWorkspace).not.toHaveBeenCalled()
+    expect(chatApiMock.clearWorkspace).not.toHaveBeenCalled()
   })
 })

@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     compact_request_timeout_seconds: int = 60  # 摘要请求超时
     compact_max_attempts_per_run: int = 2  # 单次运行压缩尝试上限
     compact_max_batches: int = 4  # 摘要请求分批上限
+    # ---- Ask User 询问工具（specs/013-ask-user-tool/contracts/ask-user-api.md §6）----
+    ask_user_timeout_seconds: int = 300  # 询问等待回答上限（秒），超时以明确结果收尾
+    # ---- 工作空间与文件系统权限（specs/014-workspace-permission/data-model.md §7）----
+    protected_paths: str = ""  # 追加系统保护路径，os.pathsep（Windows ";"）分隔；与内置默认集合并
 
 
 settings = Settings()

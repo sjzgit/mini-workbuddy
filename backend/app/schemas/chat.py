@@ -46,6 +46,8 @@ class ConversationSummary(BaseModel):
     agent_id: int
     updated_at: str
     created_at: str
+    # ---- 014 增补：Session Workspace（契约 workspace-permission-api.md §1.4）----
+    workspace_path: str | None = None
 
 
 class MessageOut(BaseModel):
@@ -95,6 +97,23 @@ class StopResponse(BaseModel):
     """停止响应：恒 stopped=true，终态以流事件或消息行为准。"""
 
     stopped: bool = True
+
+
+# ---- 013 增补：Ask User 回答端点（specs/0-13 placeholder/contracts/ask-user-api.md §3）----
+
+
+class AskAnswerRequest(BaseModel):
+    """POST ask-answers 提交体：selected=选中选项（顺序），text=手动输入文本。"""
+
+    call_id: str = Field(min_length=1)
+    selected: list[str] = Field(default_factory=list)
+    text: str | None = None
+
+
+class AskAnswerResponse(BaseModel):
+    """回答端点成功响应。"""
+
+    resolved: bool = True
 
 
 # ---- SSE 事件 data 结构（契约 StreamEvent 节）----

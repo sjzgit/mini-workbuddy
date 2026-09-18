@@ -31,6 +31,15 @@ export interface ConversationSummary {
   agent_id: number
   updated_at: string
   created_at: string
+  /** 014：Session Workspace（null = 未选择；契约 workspace-permission-api.md §1.4） */
+  workspace_path: string | null
+}
+
+/** 014：会话工作空间查询/设置/清除的统一响应（契约 §1.1） */
+export interface WorkspaceInfo {
+  workspace_path: string | null
+  workspace_source: string | null
+  workspace_selected_at: string | null
 }
 
 /** 消息（读取与流终态事件返回） */
@@ -122,6 +131,31 @@ export interface ErrorEventData {
   message: string
 }
 
+/** 013 增补：ask_user 询问事件（契约 specs/013-ask-user-tool/contracts/ask-user-api.md §2） */
+export interface AskUserData {
+  run_id: string
+  seq: number
+  round: number
+  call_id: string
+  question: string
+  /** 空 = 开放式（输入框） */
+  options: string[]
+  multi_select: boolean
+}
+
+/** 014 增补：权限判定事件（契约 specs/014-workspace-permission/contracts/workspace-permission-api.md §2.1） */
+export interface PermissionCheckedData {
+  run_id: string
+  seq: number
+  round: number
+  call_id: string
+  decision: 'allow' | 'ask_user' | 'deny'
+  tool_name: string
+  /** 规范化后的目标路径（不含文件内容） */
+  path: string
+  reason: string
+}
+
 /** Token 用量（null = 接口未返回，未知；不出现 0 冒充，FR-034） */
 export interface RuntimeUsage {
   prompt_tokens: number | null
@@ -149,6 +183,8 @@ export type StreamEvent =
   | { event: 'model_request_completed'; data: { run_id: string; seq: number; round: number; call_id: string; status: string; duration_ms: number; usage: RuntimeUsage | null } }
   | { event: 'tool_call_started'; data: ToolCallStartedData }
   | { event: 'tool_call_completed'; data: ToolCallCompletedData }
+  | { event: 'ask_user'; data: AskUserData }
+  | { event: 'permission_checked'; data: PermissionCheckedData }
   | { event: 'error'; data: ErrorEventData }
   | { event: 'run_completed'; data: RunCompletedData }
 
@@ -238,6 +274,13 @@ function dispatchFrame(frame: { event: string; data: string }, onEvent: (e: Stre
       case 'tool_call_completed':
         onEvent({ event: 'tool_call_completed', data: data as ToolCallCompletedData })
         break
+      case 'ask_user':
+        onEvent({ event: 'ask_user', data: data as AskUserData })
+        break
+      case 'permission_checked':
+        // 014：权限判定事件（审计；聊天页暂不消费，前向兼容）
+        onEvent({ event: 'permission_checked', data: data as PermissionCheckedData })
+        break
       case 'error':
         onEvent({ event: 'error', data: data as ErrorEventData })
         break
@@ -273,5 +316,26 @@ export const chatApi = {
   },
   stop(conversationId: number, messageId: number): Promise<StopResponse> {
     return http.post(`/conversations/${conversationId}/messages/${messageId}/stop`)
+  },
+  /** 013：提交 ask_user 回答（唤醒挂起的运行） */
+  answerAsk(
+    conversationId: number,
+    messageId: number,
+    payload: { call_id: string; selected: string[]; text: string | null },
+  ): Promise<{ resolved: boolean }> {
+    return http.post(
+      `/conversations/${conversationId}/messages/${messageId}/ask-answers`,
+      payload,
+    )
+  },
+  /** 014：会话工作空间查询 / 设置 / 清除（契约 workspace-permission-api.md §1） */
+  getWorkspace(conversationId: number): Promise<WorkspaceInfo> {
+    return http.get(`/conversations/${conversationId}/workspace`)
+  },
+  setWorkspace(conversationId: number, path: string): Promise<WorkspaceInfo> {
+    return http.put(`/conversations/${conversationId}/workspace`, { path })
+  },
+  clearWorkspace(conversationId: number): Promise<WorkspaceInfo> {
+    return http.del(`/conversations/${conversationId}/workspace`)
   },
 }

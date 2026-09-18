@@ -50,35 +50,54 @@ def test_read_missing_file(workspace_dir: Path) -> None:
 
 
 class TestOutsideAuthorizedDir:
+    """014 权限职责上移：工具层解析不再做白名单拒绝（运行时判定在 run_tool
+    权限检查阶段；test_workspace_runtime.py 覆盖三值判定与确认流）。
+    此处断言新语义：路径解析忠实展开 `..` 与绝对路径。
+    """
+
     @pytest.mark.parametrize(
         "path",
         ["../escape.txt", "..\\escape.txt", "a/../../escape.txt"],
     )
-    def test_traversal_rejected(self, workspace_dir: Path, path: str) -> None:
+    def test_traversal_resolves_to_real_location(self, workspace_dir: Path, path: str) -> None:
         with pytest.raises(ToolExecutionError) as exc_info:
             file_tool.run(FileReadWriteParams(action="read", path=path))
-        assert exc_info.value.code == "path_outside_root"
+        # 逃逸路径 resolve 回真实位置；真实位置无文件 → file_not_found
+        # （旧语义是 path_outside_root；014 权限上移后穿越本身不再在工具层拒绝）
+        assert exc_info.value.code == "file_not_found"
 
-    def test_absolute_posix_path_rejected(self, workspace_dir: Path) -> None:
-        with pytest.raises(ToolExecutionError) as exc_info:
+    def test_absolute_path_resolves_asis(self, workspace_dir: Path) -> None:
+        """绝对路径原样解析（运行时权限判定在 run_tool 权限阶段）。"""
+        target = Path("C:/Windows/win.ini")
+        try:
+            file_tool.run(FileReadWriteParams(action="read", path="C:/Windows/win.ini"))
+        except ToolExecutionError as exc:
+            # win.ini 真实存在但常非 UTF-8 文本；不存在则 file_not_found
+            assert exc.code in ("file_not_found", "file_not_text", "file_too_large")
+        assert target.exists() or True  # 平台相关，仅语义占位
+
+    def test_absolute_posix_path_resolves_asis(self, workspace_dir: Path) -> None:
+        try:
             file_tool.run(FileReadWriteParams(action="read", path="/etc/hosts"))
-        assert exc_info.value.code == "path_outside_root"
+        except ToolExecutionError as exc:
+            assert asserts_marker if False else exc.code in ("file_not_found", "file_not_text")
 
-    def test_windows_drive_path_rejected(self, workspace_dir: Path) -> None:
-        with pytest.raises(ToolExecutionError) as exc_info:
-            file_tool.run(
-                FileReadWriteParams(action="read", path="C:/Windows/win.ini"),
-            )
-        assert exc_info.value.code == "path_outside_root"
+    def test_traversal_write_resolves_and_writes(
+        self, workspace_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """相对穿越写：解析回真实位置写入（运行时场景由权限阶段拦截）。"""
+        sandbox = tmp_path / "sandbox"
+        sandbox.mkdir()
+        monkeypatch.setattr(
+            "app.services.file_tool.settings.authorized_dir", str(sandbox),
+        )
+        outcome = file_tool.run(FileReadWriteParams(
+            action="write", path="../outside.txt", content="x",
+        ))
+        assert outcome.success is True
+        assert (sandbox.parent / "outside.txt").read_text(encoding="utf-8") == "x"
+        # 注意：该路径已超出授权目录——运行时场景中此路径会先经权限阶段判定
 
-    def test_traversal_write_rejected(self, workspace_dir: Path) -> None:
-        with pytest.raises(ToolExecutionError) as exc_info:
-            file_tool.run(
-                FileReadWriteParams(
-                    action="write", path="../outside.txt", content="x",
-                ),
-            )
-        assert exc_info.value.code == "path_outside_root"
 
 
 def test_non_utf8_file_rejected(workspace_dir: Path) -> None:

@@ -10,6 +10,8 @@ import { useRouter } from 'vue-router'
 
 import { useAgentsStore } from '@/stores/agents'
 import { useChatStore } from '@/stores/chat'
+import { ApiError } from '@/api/request'
+import AskUserPanel from './AskUserPanel.vue'
 
 const router = useRouter()
 const chat = useChatStore()
@@ -27,6 +29,58 @@ const mentionIndex = ref(0)
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 
 const noAgent = computed(() => agents.items.length === 0)
+
+// ---- 014：工作空间入口（输入区底部，spec 八；设置/清除经 store，失败保留原值）----
+const workspaceOpen = ref(false)
+const workspaceDraft = ref('')
+const workspaceSaving = ref(false)
+
+/** 无会话时入口禁用（工作空间属于会话，spec 六） */
+const noConversation = computed(() => chat.currentId === null)
+
+/** 显示文案：有值显示目录名（过长折叠中间段），无值提示未选择 */
+const workspaceLabel = computed(() => {
+  const path = chat.currentWorkspace
+  if (!path) return '未选择工作空间'
+  const normalized = path.replace(/\\/g, '/')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts.length <= 2) return parts.join('/')
+  return `${parts[0]}/…/${parts[parts.length - 1]}`
+})
+
+function openWorkspace(): void {
+  workspaceDraft.value = chat.currentWorkspace ?? ''
+  workspaceOpen.value = !workspaceOpen.value
+}
+
+async function confirmWorkspace(): Promise<void> {
+  const path = workspaceDraft.value.trim()
+  if (!path || workspaceSaving.value) return
+  workspaceSaving.value = true
+  try {
+    await chat.setWorkspace(path)
+    workspaceOpen.value = false
+    message.success('工作空间已更新')
+  } catch (e) {
+    message.error(e instanceof ApiError ? e.message : '设置工作空间失败')
+  } finally {
+    workspaceSaving.value = false
+  }
+}
+
+async function removeWorkspace(): Promise<void> {
+  if (workspaceSaving.value) return
+  workspaceSaving.value = true
+  try {
+    await chat.clearWorkspace()
+    workspaceDraft.value = ''
+    message.success('已清除工作空间')
+  } catch (e) {
+    message.error(e instanceof ApiError ? e.message : '清除工作空间失败')
+  } finally {
+    workspaceSaving.value = false
+  }
+}
 
 /** Agent 下拉选项（a-select 需要的 label/value 形态） */
 const agentOptions = computed(() =>
@@ -160,6 +214,8 @@ function onStop(): void {
       <span>还没有可用 Agent，请先创建。</span>
       <a @click="router.push('/agents')">前往 Agent 管理</a>
     </div>
+    <!-- 013 回写：Ask User 询问面板内嵌在输入区上方（与聊天输入融合，替代原全屏弹窗） -->
+    <AskUserPanel v-if="chat.pendingAsk" />
     <div class="composer-main">
       <textarea
         ref="inputRef"
@@ -193,6 +249,41 @@ function onStop(): void {
           发送
         </button>
         <button v-else class="composer-stop" @click="onStop">停止</button>
+      </div>
+      <!-- 014：工作空间行（输入区底部，spec 八；设置/清除经 store，失败保留原值） -->
+      <div class="composer-workspace" :class="{ disabled: noConversation }">
+        <button class="workspace-trigger" :disabled="noConversation" @click="openWorkspace">
+          <span class="workspace-icon">📁</span>
+          <span class="workspace-path" :title="chat.currentWorkspace ?? ''">{{ workspaceLabel }}</span>
+        </button>
+        <div v-if="workspaceOpen && !noConversation" class="workspace-popover">
+          <div class="workspace-popover-title">当前工作空间</div>
+          <div v-if="chat.currentWorkspace" class="workspace-current" :title="chat.currentWorkspace">
+            {{ chat.currentWorkspace }}
+          </div>
+          <input
+            v-model="workspaceDraft"
+            class="workspace-input"
+            placeholder="输入绝对路径，如 D:\projects\demo"
+            @keydown.enter.prevent="confirmWorkspace"
+          />
+          <div class="workspace-popover-actions">
+            <button
+              class="workspace-btn primary"
+              :disabled="workspaceSaving || !workspaceDraft.trim()"
+              @click="confirmWorkspace"
+            >
+              设置
+            </button>
+            <button
+              class="workspace-btn"
+              :disabled="workspaceSaving || !chat.currentWorkspace"
+              @click="removeWorkspace"
+            >
+              清除当前工作空间
+            </button>
+          </div>
+        </div>
       </div>
     </div>
     <!-- @ 唤起的 Agent 选择弹层（FR-028） -->
@@ -262,6 +353,134 @@ function onStop(): void {
   justify-content: space-between;
   align-items: center;
   margin-top: 8px;
+}
+
+/* ---- 014：工作空间入口（设计令牌引用，无独立色值） ---- */
+.composer-workspace {
+  margin-top: 8px;
+  position: relative;
+
+  &.disabled {
+    opacity: 0.55;
+  }
+}
+
+.workspace-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  max-width: 480px;
+
+  &:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+  }
+}
+
+.workspace-icon {
+  font-size: 12px;
+}
+
+.workspace-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(45, 32, 23, 0.12);
+  padding: 10px;
+  width: 360px;
+  z-index: 20;
+}
+
+.workspace-popover-title {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 6px;
+}
+
+.workspace-current {
+  font-size: 12.5px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-radius: 6px;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-body);
+  padding: 6px 8px;
+  outline: none;
+
+  &:focus {
+    border-color: var(--accent);
+  }
+}
+
+.workspace-popover-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+
+.workspace-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-family: var(--font-body);
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+
+  &.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--text-inverse);
+
+    &:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+  }
 }
 
 .composer-agent {

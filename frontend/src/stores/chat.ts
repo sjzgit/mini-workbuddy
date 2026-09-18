@@ -59,7 +59,7 @@ export interface TextSegment {
 
 export type StreamSegment = TextSegment | ToolCardSegment
 
-/** 每个会话的运行展示槽（010 data-model §3.1） */
+/** 每个会话的运行展示槽（010 data-model §3.1；013 增补 pendingAsk） */
 export interface RunDisplayState {
   phase: GenerationPhase
   generatingReplyId: number | null
@@ -67,10 +67,25 @@ export interface RunDisplayState {
   error: ChatError | null
   /** 最近一轮已结束运行的回复 id：渲染时从 messages 过滤（该回复由 segments 展示） */
   finishedReplyId: number | null
+  /** 013：等待用户回答的询问（null = 无；切会话切回来弹窗仍在，FR-012） */
+  pendingAsk: {
+    callId: string
+    question: string
+    options: string[]
+    multiSelect: boolean
+    submitting: boolean
+  } | null
 }
 
 function createRunState(): RunDisplayState {
-  return { phase: 'idle', generatingReplyId: null, segments: [], error: null, finishedReplyId: null }
+  return {
+    phase: 'idle',
+    generatingReplyId: null,
+    segments: [],
+    error: null,
+    finishedReplyId: null,
+    pendingAsk: null,
+  }
 }
 
 /** 空槽常量：无槽会话的稳定返回值（避免 computed 每次新建对象） */
@@ -380,6 +395,15 @@ export const useChatStore = defineStore('chat', () => {
         resultText: '',
       })
       run.phase = 'tool'
+    } else if (event.event === 'ask_user') {
+      // 013：询问事件 → 置位弹窗状态（运行在等待回答，FR-004）
+      run.pendingAsk = {
+        callId: event.data.call_id,
+        question: event.data.question,
+        options: event.data.options ?? [],
+        multiSelect: event.data.multi_select,
+        submitting: false,
+      }
     } else if (event.event === 'tool_call_completed') {
       // 就地更新对应调用标识的卡片（开始时已在其时序位置占位，FR-007/009）
       const seg = findCard(run, event.data.call_id)
@@ -390,6 +414,10 @@ export const useChatStore = defineStore('chat', () => {
         seg.resultText = event.data.result
         seg.displayName = event.data.display_name || seg.displayName
         seg.serverName = event.data.server_name ?? seg.serverName
+      }
+      // 013：该询问已完结（回答/取消/超时）→ 关闭弹窗
+      if (run.pendingAsk && run.pendingAsk.callId === event.data.call_id) {
+        run.pendingAsk = null
       }
       run.phase = 'generating'
     } else if (event.event === 'error') {
@@ -423,6 +451,7 @@ export const useChatStore = defineStore('chat', () => {
       // 该回复改由 segments 展示（保留卡片与交错序），messages 渲染时过滤此条
       run.finishedReplyId = data.message.id
     }
+    run.pendingAsk = null // 013：终态兜底关弹窗（取消/超时路径）
     run.phase = 'idle'
     run.generatingReplyId = null
   }
@@ -486,6 +515,8 @@ export const useChatStore = defineStore('chat', () => {
     error: computed(() => currentRun.value.error),
     generatingReplyId: computed(() => currentRun.value.generatingReplyId),
     finishedReplyId: computed(() => currentRun.value.finishedReplyId),
+    /** 013：当前会话等待回答的询问（弹窗渲染依据） */
+    pendingAsk: computed(() => currentRun.value.pendingAsk),
     runStates,
     fetchConversations,
     createConversation,
@@ -498,5 +529,49 @@ export const useChatStore = defineStore('chat', () => {
     stopGeneration,
     switchAgent,
     upsertConversation,
+    /** 013：提交当前询问的回答（FR-009；失败时弹窗保留可重试，FR-017） */
+    submitAskAnswer: async (selected: string[], text: string | null): Promise<void> => {
+      const run = currentRun.value
+      const ask = run.pendingAsk
+      if (!ask || ask.submitting) return
+      const cid = currentId.value
+      const mid = run.generatingReplyId
+      if (cid === null || mid === null) return
+      ask.submitting = true
+      try {
+        await chatApi.answerAsk(cid, mid, { call_id: ask.callId, selected, text })
+        // 成功：tool_call_completed 事件会关闭弹窗（store 事件路由处理）
+      } finally {
+        ask.submitting = false
+      }
+    },
+    /** 014：当前会话工作空间（null = 未选择；从摘要派生，随 upsert 同步） */
+    currentWorkspace: computed<string | null>(
+      () => currentConversation.value?.workspace_path ?? null,
+    ),
+    /** 014：设置工作空间：成功 upsert 刷新；失败抛错保留原值（前端不预改状态） */
+    setWorkspace: async (path: string): Promise<void> => {
+      const cid = currentId.value
+      if (cid === null || currentConversation.value === null) {
+        throw new Error('请先创建或选择会话')
+      }
+      const info = await chatApi.setWorkspace(cid, path)
+      upsertConversation({
+        ...currentConversation.value,
+        workspace_path: info.workspace_path,
+      })
+    },
+    /** 014：清除工作空间：失败抛错保留原值 */
+    clearWorkspace: async (): Promise<void> => {
+      const cid = currentId.value
+      if (cid === null || currentConversation.value === null) {
+        throw new Error('请先创建或选择会话')
+      }
+      const info = await chatApi.clearWorkspace(cid)
+      upsertConversation({
+        ...currentConversation.value,
+        workspace_path: info.workspace_path,
+      })
+    },
   }
 })

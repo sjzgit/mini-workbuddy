@@ -1,7 +1,9 @@
-"""file_read_write 工具实现（FR-018~020，research R5）。
+"""file_read_write 工具实现（003 FR-018~020 + 014 权限职责上移，research R2）。
 
-路径校验：(root / path).resolve() 后必须仍在授权目录内（is_relative_to），
-统一拦截绝对路径、盘符路径与 .. 穿越后的逃逸；授权目录首次使用自动创建。
+014 起：运行时授权判定（系统 ∪ 会话工作空间 ∪ 临时授权的三值判定）唯一入口是
+agent_runtime.tools.run_tool 的权限检查阶段——工具层不做运行时权限拒绝
+（Invariant 2/9）。相对路径语义不变：相对系统授权目录（003 契约）；
+绝对路径直接解析，交由运行时判定。
 """
 
 from pathlib import Path
@@ -21,15 +23,17 @@ def run(params: FileReadWriteParams) -> ToolRunOutcome:
 
 
 def _resolve_within_root(path_str: str) -> Path:
+    """解析目标路径：相对路径按系统授权目录拼接；绝对路径原样解析（不判定）。
+
+    运行时授权判定由 run_tool 权限检查阶段统一完成（014 Invariant 2/9）；
+    resolve() 展开 `..` 并穿透符号链接，与 PathResolver 同算法。
+    """
     root = Path(settings.authorized_dir).resolve()
     root.mkdir(parents=True, exist_ok=True)  # 授权目录不存在时自动创建
-    target = (root / path_str).resolve()
-    if not target.is_relative_to(root):
-        raise ToolExecutionError(
-            code="path_outside_root",
-            message=f"路径超出授权目录：{path_str}。仅允许访问授权目录内的相对路径",
-        )
-    return target
+    candidate = Path(path_str)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (root / candidate).resolve()
 
 
 def _read(target: Path, display_path: str) -> ToolRunOutcome:

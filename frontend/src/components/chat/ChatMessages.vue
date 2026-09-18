@@ -35,6 +35,21 @@ const lastAssistantId = computed(() => {
   return null
 })
 
+/** 013 修复：segments 路径回复的复制内容——优先终态消息全文，流式中退化为已生成正文拼接 */
+const currentReplyContent = computed(() => {
+  const finishedId = chat.finishedReplyId
+  if (finishedId !== null) {
+    const finished = chat.messages.find((m) => m.id === finishedId)
+    if (finished) {
+      return finished.content
+    }
+  }
+  return chat.segments
+    .filter((s): s is TextSegment => s.kind === 'content')
+    .map((s) => s.text)
+    .join('')
+})
+
 async function copyText(text: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
@@ -168,7 +183,7 @@ watch(
             ></div>
               <ToolProcessCard v-else :card="(seg as ToolCardSegment)" @toggle="compensateOnResize" />
             </template>
-            <!-- 操作区：复制 / 重新生成（悬停显示，与 MessageBubble 口径一致） -->
+            <!-- 操作区：复制 / 重新生成（固定显示，与 MessageBubble 口径一致） -->
             <div class="msg-actions">
               <a class="msg-action" @click="copyText(item.content)">复制</a>
               <a
@@ -212,6 +227,15 @@ watch(
             <ToolProcessCard v-else :card="(seg as ToolCardSegment)" @toggle="compensateOnResize" />
           </template>
           <div v-if="chat.phase === 'generating'" class="msg-generating">正在生成…</div>
+          <!-- 013 修复：操作区固定显示（此前该路径无复制按钮，最新回复缺失复制） -->
+          <div class="msg-actions">
+            <a class="msg-action" @click="copyText(currentReplyContent)">复制</a>
+            <a
+              v-if="chat.phase === 'idle'"
+              class="msg-action"
+              @click="chat.regenerate()"
+            >重新生成</a>
+          </div>
         </div>
       </div>
 
@@ -304,12 +328,6 @@ watch(
   margin-top: 6px;
   display: flex;
   gap: 12px;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.msg-row:hover .msg-actions {
-  opacity: 1;
 }
 
 .msg-action {

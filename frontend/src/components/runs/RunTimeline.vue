@@ -157,6 +157,23 @@ const steps = computed<TimelineStep[]>(() => {
         callId,
         payloadTypes: [],
       }, ['tool_params', 'tool_result']))
+    } else if (event.event_type === 'ask_user') {
+      // 013：询问事件行（回答内容在该 call 的 tool_result 载荷中）
+      const options = Array.isArray(event.data?.options) ? event.data.options as string[] : []
+      result.push(withPayloads({
+        key: `ask-${event.seq}`,
+        kind: 'tool',
+        status: 'running',
+        callId: pickStr(event, 'call_id'),
+        title: `向用户提问（第 ${event.round ?? '-'} 轮）`,
+        lines: [
+          `问题：${pickStr(event, 'question')}`,
+          options.length
+            ? `选项：${options.join('、')}${event.data?.multi_select ? '（多选）' : ''}`
+            : '开放式回答',
+        ],
+        payloadTypes: [],
+      }, ['tool_params', 'tool_result']))
     } else if (event.event_type === 'compression_started') {
       result.push(withPayloads({
         key: `comp-s-${event.seq}`, kind: 'compression', status: 'running', callId: event.call_id ?? '',

@@ -14,6 +14,9 @@ from pydantic import BaseModel
 # 入口层（执行前三查 + 兜底，FR-010/012）
 # 工具层（各工具实现抛出）：unknown_timezone / dangerous_command_blocked /
 #   command_timeout / path_outside_root / file_not_found / file_too_large / file_not_text
+# 014 权限层增补（specs/014-workspace-permission/contracts/workspace-permission-api.md §3）：
+#   system_protected_path / permission_denied_by_user / path_resolution_failed /
+#   permission_check_failed / ask_user_unavailable
 ToolErrorCode = Literal[
     "tool_not_found",
     "tool_disabled",
@@ -26,6 +29,11 @@ ToolErrorCode = Literal[
     "file_not_found",
     "file_too_large",
     "file_not_text",
+    "system_protected_path",
+    "permission_denied_by_user",
+    "path_resolution_failed",
+    "permission_check_failed",
+    "ask_user_unavailable",
 ]
 
 # 危险命令类别（tool-definitions.md §5）

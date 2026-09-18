@@ -58,6 +58,7 @@ def _to_summary(row: RunEntry):
         conversation_id=row.conversation_id,
         agent_name=row.agent_name,
         model_name=row.model_name,
+        workspace_path=getattr(row, "workspace_path", None),
         status=row.status,
         end_reason=row.end_reason,
         error_summary=row.error_summary,
